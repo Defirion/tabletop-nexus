@@ -270,7 +270,7 @@ $lines = New-Object System.Collections.Generic.List[string]
 $lines.Add('# Local verification report')
 $lines.Add('')
 $lines.Add("- Target: $targetLabel")
-$lines.Add("- SHA: `$targetSha`")
+$lines.Add(('- SHA: `{0}`' -f $targetSha))
 $lines.Add("- Mode: $mode")
 $lines.Add("- Timestamp: $timestamp")
 $lines.Add("- Automated outcome: **$outcome**")
@@ -284,7 +284,7 @@ if ($checks.Count -eq 0) {
 }
 else {
     foreach ($check in $checks) {
-        $lines.Add("- PASS — $check")
+        $lines.Add("- PASS - $check")
     }
 }
 if ($failure) {
