@@ -1,3 +1,5 @@
+#requires -Version 7.0
+
 param(
     [int]$Pr = 0,
     [switch]$Isolated
@@ -12,11 +14,9 @@ function Invoke-External {
         [Parameter(Mandatory = $true)][string[]]$CommandArgs
     )
 
-    # Windows PowerShell 5.1 surfaces redirected native stderr as non-terminating
-    # NativeCommandError records. Git writes ordinary progress (for example
-    # "From https://...") to stderr even when it succeeds, so temporarily avoid
-    # promoting that stream to a terminating PowerShell error. The native exit
-    # code remains the authoritative success/failure signal.
+    # Native tools may write ordinary progress to stderr even when they succeed.
+    # Capture both streams without promoting stderr text itself to a verifier
+    # failure; the native process exit code is authoritative.
     $previousErrorActionPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'
@@ -109,6 +109,7 @@ if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
     throw 'GitHub CLI (gh) is required.'
 }
 
+$powerShellVersion = $PSVersionTable.PSVersion.ToString()
 $repoRoot = Invoke-Git -CommandArgs @('rev-parse', '--show-toplevel')
 Set-Location $repoRoot
 Assert-CleanTrackedState -Path $repoRoot
@@ -285,6 +286,7 @@ $lines.Add('')
 $lines.Add("- Target: $targetLabel")
 $lines.Add(('- SHA: `{0}`' -f $targetSha))
 $lines.Add("- Mode: $mode")
+$lines.Add("- PowerShell: $powerShellVersion")
 $lines.Add("- Timestamp: $timestamp")
 $lines.Add("- Automated outcome: **$outcome**")
 $lines.Add("- Target freshness: $freshness")
@@ -349,6 +351,7 @@ if ($tempWorktree) {
 
 Write-Host "Verification: $outcome"
 Write-Host "Target: $targetLabel @ $targetSha"
+Write-Host "PowerShell: $powerShellVersion"
 Write-Host "Report: $latestPath"
 
 if ($outcome -eq 'FAIL') { exit 1 }
