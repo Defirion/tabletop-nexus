@@ -6,7 +6,7 @@ The project has one deliberately narrow responsibility:
 
 > **Nexus knows how to run games; Nexus does not know how games work.**
 
-Games remain independent applications and repositories. Tabletop Nexus discovers compatible games, launches and stops their local servers, checks their health, and exposes them behind one LAN-facing portal and port.
+Games remain independent applications and repositories. Tabletop Nexus will discover compatible games, launch and stop their local servers, check their health, and expose them behind one LAN-facing portal and port.
 
 ## Goals
 
@@ -19,7 +19,19 @@ Games remain independent applications and repositories. Tabletop Nexus discovers
 
 ## Status
 
-Early scaffolding. The runtime contract and initial portal architecture are being established before game adapters are added.
+**Workflow bootstrap.** The AI/GitHub development workflow is being established before application scaffolding begins. Product architecture, the game compatibility contract, runtime code, and adapters come after this baseline is reviewed and merged.
+
+## AI-assisted development workflow
+
+GitHub is the shared state between independent Implementer, Verifier, and Reviewer runs:
+
+```text
+Task -> Implement -> PR -> Verify -> Review -> Merge
+                         ^         |
+                         +-- Fix <-+
+```
+
+Start with `AGENTS.md`. `VERIFICATION.md` defines the canonical local evidence contract; role-specific instructions live under `docs/ai/`.
 
 ## Planned shape
 
@@ -27,16 +39,16 @@ Early scaffolding. The runtime contract and initial portal architecture are bein
 LAN clients
     |
     v
-Tabletop Nexus :3000
-    |-- /                     portal
-    |-- /api/games            library/runtime status
-    |-- /games/<game-id>/...  reverse proxy
+Tabletop Nexus
+    |-- portal
+    |-- game registry/runtime status
+    |-- /games/<game-id>/... reverse proxy
     |
     +-- private game process A
     +-- private game process B
 ```
 
-See `GAME-CONTRACT.md` for the integration boundary and `docs/ARCHITECTURE.md` / `docs/PLAN.md` as the implementation takes shape.
+This is architectural intent only; application scaffolding has not started yet.
 
 ## Licensing
 
