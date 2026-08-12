@@ -1,0 +1,23 @@
+{
+  "name": "tabletop-nexus",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Self-hosted LAN portal and runtime orchestrator for browser-based tabletop games.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "verify:local": "npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.0",
+    "tsx": "4.19.2",
+    "typescript": "5.8.3",
+    "vitest": "3.2.4"
+  }
+}

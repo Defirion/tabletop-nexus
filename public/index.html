@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#111318" />
+    <title>Tabletop Nexus</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="hero">
+        <p class="eyebrow">LOCAL TABLETOP LIBRARY</p>
+        <h1>Tabletop Nexus</h1>
+        <p class="lede">One portal. One LAN address. Independent browser games.</p>
+      </header>
+
+      <section aria-labelledby="library-title">
+        <div class="section-heading">
+          <h2 id="library-title">Game library</h2>
+          <span id="library-count" class="count">…</span>
+        </div>
+        <div id="games" class="game-grid" aria-live="polite">
+          <p class="empty">Loading local library…</p>
+        </div>
+      </section>
+
+      <footer>
+        <span>Nexus runs games; it does not know how games work.</span>
+      </footer>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
