@@ -12,8 +12,21 @@ function Invoke-External {
         [Parameter(Mandatory = $true)][string[]]$CommandArgs
     )
 
-    $output = & $Command @CommandArgs 2>&1
-    $exitCode = $LASTEXITCODE
+    # Windows PowerShell 5.1 surfaces redirected native stderr as non-terminating
+    # NativeCommandError records. Git writes ordinary progress (for example
+    # "From https://...") to stderr even when it succeeds, so temporarily avoid
+    # promoting that stream to a terminating PowerShell error. The native exit
+    # code remains the authoritative success/failure signal.
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = & $Command @CommandArgs 2>&1
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
     $text = ($output | ForEach-Object { "$_" }) -join "`n"
     if ($exitCode -ne 0) {
         throw "$Command $($CommandArgs -join ' ') failed with exit code $exitCode`n$text"
