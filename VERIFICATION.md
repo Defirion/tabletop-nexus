@@ -59,7 +59,7 @@ Every implementation PR must contain exactly one of this heading:
 
 The section must contain either exactly `None`, or a non-empty concrete declaration of the human/external checks required. A missing heading, duplicate heading, empty section, or `None` mixed with other content is an invalid handoff and must not be treated as `None`.
 
-When human verification is required, list each check, what the human should do, and the expected observation. Placeholder-only text such as `TBD`, `TODO`, or `N/A` is not a concrete declaration.
+When human verification is required, list each check, what the human should do, and the expected observation.
 
 For a PR target, the canonical verifier surfaces this section in the report. An invalid handoff prevents a successful reviewer handoff even when the automated gate passes.
 
