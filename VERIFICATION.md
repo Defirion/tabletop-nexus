@@ -4,16 +4,16 @@ Tabletop Nexus follows the repository-agnostic verification contract from `Defir
 
 ## Canonical verifier
 
-Run from the repository root:
+The canonical verifier requires PowerShell 7 or newer. Run it from the repository root with `pwsh`:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\verify.ps1
+pwsh -NoProfile -File .\verify.ps1
 ```
 
 Select a PR explicitly when needed:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\verify.ps1 -Pr 12
+pwsh -NoProfile -File .\verify.ps1 -Pr 12
 ```
 
 Use `-Isolated` when preserving the active checkout matters.
@@ -25,7 +25,7 @@ The verifier must:
    - one open PR -> verify it automatically;
    - several open PRs -> prompt for a choice, or use `-Pr` non-interactively.
 2. Bind verification to the exact GitHub target SHA before checks begin. Local branch state is never authoritative.
-3. Refuse modified tracked files or staged changes. Untracked/gitignored files may remain unless they could affect the result.
+3. Refuse modified tracked files or staged changes. Untracked/gitignored files may remain unless they could affect the result. Normal target checkout must refuse rather than overwrite ignored files that collide with the selected target; use `-Isolated` when preserving the active checkout matters.
 4. Support isolated verification with `-Isolated`.
 5. Run the repository's canonical automated checks and confirm they leave no unexpected tracked/staged changes.
 6. Recheck the GitHub target afterward. If it moved, the evidence is `STALE`.
@@ -51,15 +51,17 @@ A Verifier may attest only to evidence it actually established. Evidence supplie
 
 ## Human verification handoff
 
-Every implementation PR must contain this exact heading:
+Every implementation PR must contain exactly one of this heading:
 
 ```markdown
 ## Human verification required
 ```
 
-Write `None` unless evidence requires a real human/external environment that automated checks and repository inspection cannot establish. Otherwise list each check, what the human should do, and the expected observation.
+The section must contain either exactly `None`, or a non-empty concrete declaration of the human/external checks required. A missing heading, duplicate heading, empty section, or `None` mixed with other content is an invalid handoff and must not be treated as `None`.
 
-For a PR target, the canonical verifier surfaces this section in the report. A missing section is an incomplete handoff and must not be treated as `None`.
+When human verification is required, list each check, what the human should do, and the expected observation.
+
+For a PR target, the canonical verifier surfaces this section in the report. An invalid handoff prevents a successful reviewer handoff even when the automated gate passes.
 
 Automated success does not satisfy human-required checks. Keep automated evidence and human evidence separate.
 
@@ -77,7 +79,7 @@ When automated verification passes and human verification is `None`, the report 
 
 Record:
 
-- target (`main` or PR number), full tested SHA, mode, and timestamp;
+- target (`main` or PR number), full tested SHA, mode, PowerShell version, and timestamp;
 - automated outcome and checks;
 - final tracked/staged worktree state;
 - target-freshness result;
