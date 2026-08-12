@@ -58,6 +58,59 @@ function Assert-CleanTrackedState {
     }
 }
 
+function Get-HumanVerificationHandoff {
+    param([Parameter(Mandatory = $true)][string]$Body)
+
+    $headingPattern = '(?m)^## Human verification required[ \t]*\r?$'
+    $headings = [regex]::Matches($Body, $headingPattern)
+
+    if ($headings.Count -eq 0) {
+        return [pscustomobject]@{
+            State = 'INVALID'
+            Content = 'Missing required `## Human verification required` section.'
+        }
+    }
+
+    if ($headings.Count -gt 1) {
+        return [pscustomobject]@{
+            State = 'INVALID'
+            Content = 'Ambiguous handoff: `## Human verification required` appears more than once.'
+        }
+    }
+
+    $heading = $headings[0]
+    $tail = $Body.Substring($heading.Index + $heading.Length)
+    $nextHeading = [regex]::Match($tail, '(?m)^## [^\r\n]+[ \t]*\r?$')
+    $section = if ($nextHeading.Success) { $tail.Substring(0, $nextHeading.Index) } else { $tail }
+    $content = $section.Trim()
+
+    if (-not $content) {
+        return [pscustomobject]@{
+            State = 'INVALID'
+            Content = 'Invalid handoff: `## Human verification required` is empty.'
+        }
+    }
+
+    if ($content -ceq 'None') {
+        return [pscustomobject]@{
+            State = 'None'
+            Content = 'None'
+        }
+    }
+
+    if ([regex]::IsMatch($content, '(?im)^[ \t]*none[ \t]*\r?$')) {
+        return [pscustomobject]@{
+            State = 'INVALID'
+            Content = 'Ambiguous handoff: `None` must be the entire section and use the canonical spelling `None`.'
+        }
+    }
+
+    return [pscustomobject]@{
+        State = 'Declared'
+        Content = $content
+    }
+}
+
 function Invoke-RepositoryChecks {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -167,20 +220,9 @@ if ($selectedPr) {
         throw "Fetched PR head $fetchedSha does not match GitHub head $targetSha."
     }
 
-    $match = [regex]::Match($prBody, '(?ms)^## Human verification required\s*\r?\n(?<content>.*?)(?=^## |\z)')
-    if (-not $match.Success) {
-        $humanState = 'MISSING'
-        $humanVerification = 'Missing required `## Human verification required` section.'
-    }
-    else {
-        $humanVerification = $match.Groups['content'].Value.Trim()
-        if ($humanVerification -eq 'None') {
-            $humanState = 'None'
-        }
-        else {
-            $humanState = 'Declared'
-        }
-    }
+    $humanHandoff = Get-HumanVerificationHandoff -Body $prBody
+    $humanState = $humanHandoff.State
+    $humanVerification = $humanHandoff.Content
 }
 else {
     $targetKind = 'main'
@@ -204,15 +246,15 @@ try {
         $verificationRoot = $tempWorktree
     }
     elseif ($targetKind -eq 'main') {
-        Invoke-Git -CommandArgs @('checkout', $defaultBranch) | Out-Null
-        Invoke-Git -CommandArgs @('merge', '--ff-only', "origin/$defaultBranch") | Out-Null
+        Invoke-Git -CommandArgs @('checkout', '--no-overwrite-ignore', $defaultBranch) | Out-Null
+        Invoke-Git -CommandArgs @('merge', '--ff-only', '--no-overwrite-ignore', "origin/$defaultBranch") | Out-Null
         $checkedOutSha = Invoke-Git -CommandArgs @('rev-parse', 'HEAD')
         if ($checkedOutSha -ne $targetSha) {
             throw "Default-branch checkout is $checkedOutSha, expected $targetSha."
         }
     }
     else {
-        Invoke-Git -CommandArgs @('checkout', '--detach', $targetSha) | Out-Null
+        Invoke-Git -CommandArgs @('checkout', '--no-overwrite-ignore', '--detach', $targetSha) | Out-Null
     }
 
     Assert-CleanTrackedState -Path $verificationRoot
@@ -320,8 +362,8 @@ $lines.Add('')
 if ($outcome -eq 'PASS' -and $targetKind -eq 'pr' -and $humanState -eq 'None') {
     $lines.Add('Automated gate complete for the exact fresh PR SHA. Human verification is `None`; the PR is ready for independent Review.')
 }
-elseif ($outcome -eq 'PASS' -and $targetKind -eq 'pr' -and $humanState -eq 'MISSING') {
-    $lines.Add('Automated gate complete, but the PR handoff is incomplete because the required human-verification section is missing.')
+elseif ($outcome -eq 'PASS' -and $targetKind -eq 'pr' -and $humanState -eq 'INVALID') {
+    $lines.Add('Automated gate complete, but the PR handoff is invalid. Correct `## Human verification required` before Review.')
 }
 elseif ($outcome -eq 'PASS' -and $targetKind -eq 'pr') {
     $lines.Add('Automated gate complete. Declared human verification remains a separate gate before merge readiness.')
@@ -356,5 +398,5 @@ Write-Host "Report: $latestPath"
 
 if ($outcome -eq 'FAIL') { exit 1 }
 if ($outcome -eq 'STALE') { exit 2 }
-if ($targetKind -eq 'pr' -and $humanState -eq 'MISSING') { exit 3 }
+if ($targetKind -eq 'pr' -and $humanState -eq 'INVALID') { exit 3 }
 exit 0
