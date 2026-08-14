@@ -114,7 +114,7 @@ function Get-HumanVerificationHandoff {
 function Invoke-RepositoryChecks {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][System.Collections.Generic.List[string]]$Checks
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Checks
     )
 
     Push-Location $Path
