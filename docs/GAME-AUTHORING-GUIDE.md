@@ -65,7 +65,7 @@ A future Nexus compatibility contract is expected to require, or strongly prefer
 - recovery from ordinary browser refresh/transient network interruption where the game has persistent player seats/sessions;
 - a deliberate boundary between public browser data and authoritative/private server data.
 
-This section is **not yet the normative schema**. Tomorrow's follow-up should classify each candidate as:
+This section is **not yet the normative schema**. The next contract-design session should classify each candidate as:
 
 ```text
 STANDARDIZE NOW
@@ -247,7 +247,7 @@ That gives useful properties for the class of games Nexus currently targets:
 - one source decides legal shared-state transitions;
 - curious browser clients cannot learn server-only state merely by inspecting JavaScript messages.
 
-Whether **server-authoritative shared state becomes a mandatory Nexus game-contract rule** is intentionally left for tomorrow's discussion. It is a strong candidate because both current games already fit it and future multiplayer tabletop games are likely to benefit, but it is a game-design constraint rather than merely a runtime constraint and should therefore be chosen deliberately.
+Whether **server-authoritative shared state becomes a mandatory Nexus game-contract rule** is intentionally left for the next contract-design session. It is a strong candidate because both current games already fit it and future multiplayer tabletop games are likely to benefit, but it is a game-design constraint rather than merely a runtime constraint and should therefore be chosen deliberately.
 
 Regardless of that future decision, any game that claims information is hidden from a player must enforce that boundary on the server side. Hiding HTML/CSS elements is not a secrecy mechanism.
 
@@ -408,7 +408,7 @@ The key test is:
 
 If yes, consider standardizing the behavior now while migration cost is low. If no, leave it game-owned.
 
-## Tomorrow's contract review queue
+## Next contract review queue
 
 Before further game-adapter work, revisit this guide and decide at least:
 
