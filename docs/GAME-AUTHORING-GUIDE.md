@@ -5,7 +5,7 @@
 
 ## Purpose
 
-Use this guide while planning a new browser game or adapting an existing one for Tabletop Nexus. The goal is to make Nexus compatibility a normal design constraint early, without forcing every game into the same engine, room model, transport, frontend framework, or persistence scheme.
+Use this guide while planning a new browser game or adapting an existing one for Tabletop Nexus. The goal is to make Nexus compatibility a normal design constraint early, while the cost of aligning games is still low.
 
 A useful flow is:
 
@@ -28,25 +28,56 @@ Once the relevant expectations have been incorporated into that game's own plan 
 
 **Nexus knows how to run games; Nexus does not know how games work.**
 
-A Nexus-ready game should expose a small runtime seam and keep game-specific concepts behind it.
+That principle does **not** mean every game should invent a completely different integration shape. With only a small number of games, it is cheaper to standardize useful cross-game behavior now than to migrate many incompatible games later.
+
+The working design direction is therefore:
+
+> **Standardize the behaviors Nexus and its operators need to rely on. Keep game rules, game-specific payloads, and implementation mechanisms game-owned.**
+
+Be deliberately strict about lifecycle, runtime topology, browser URL behavior, recoverability, public/private boundaries, and the supported player experience. Be deliberately flexible about rules engines and game-specific wire payloads.
 
 Nexus should not need special branches for:
 
-- a particular game's room/lobby model;
-- its rules engine;
-- hidden information;
-- reconnect tokens;
+- a particular game's rules;
+- hidden game information;
 - scoring;
-- player roles;
 - board layout;
 - turn order;
-- game-specific API payloads.
+- game-specific API or WebSocket payloads.
 
-If Nexus needs to understand one of those concepts, first ask whether the game can satisfy the existing runtime/browser boundary instead.
+Repeated cross-game needs should first be expressed as common behavior. Only standardize a particular mechanism when Nexus itself genuinely needs to depend on that mechanism.
 
-## Required compatibility seam
+## Current candidate contract direction
 
-The exact normative requirements live in `GAME-CONTRACT.md`. During planning, make sure the game can provide:
+The following items are stronger than the current schema-1 contract and are recorded here for deliberate review before any of them are promoted into `GAME-CONTRACT.md`.
+
+A future Nexus compatibility contract is expected to require, or strongly prefer, the following common shape:
+
+- one Nexus-supervised production runtime;
+- one Nexus-assigned private browser-facing port;
+- `HOST`, `PORT`, and `BASE_PATH` support;
+- one normal player entrypoint beneath `BASE_PATH`;
+- production frontend assets served by that same supervised runtime rather than a separate development server;
+- same-origin browser communication beneath `BASE_PATH`;
+- standard health/readiness behavior;
+- graceful shutdown and full port release;
+- complete play without a mandatory dedicated display;
+- recovery from ordinary browser refresh/transient network interruption where the game has persistent player seats/sessions;
+- a deliberate boundary between public browser data and authoritative/private server data.
+
+This section is **not yet the normative schema**. Tomorrow's follow-up should classify each candidate as:
+
+```text
+STANDARDIZE NOW
+GUIDANCE ONLY
+GAME-OWNED
+```
+
+and then update `GAME-CONTRACT.md` only for the items intentionally promoted.
+
+## Required compatibility seam today
+
+The exact normative requirements currently live in `GAME-CONTRACT.md`. During planning, make sure the game can already provide:
 
 - a valid schema-1 `boardgame.json`;
 - one Nexus-visible runtime command;
@@ -56,7 +87,56 @@ The exact normative requirements live in `GAME-CONTRACT.md`. During planning, ma
 - complete play without a mandatory dedicated display;
 - normal termination initiated by Nexus.
 
-A game may have multiple internal packages or modules. "One process" means Nexus launches and supervises one runtime boundary, not that the source tree must be monolithic.
+A game may have multiple internal packages or modules. "One runtime" means Nexus launches and supervises one production process boundary, not that the source tree or internal code architecture must be monolithic.
+
+## One production runtime, not one trust boundary
+
+Development tooling may use multiple processes. The Nexus production launch path should not.
+
+For a typical web game the desired production shape is:
+
+```text
+Nexus
+  |
+  v
+one game runtime / one private port
+  |
+  +-- public built HTML/CSS/JS/assets
+  +-- game HTTP API, if used
+  +-- SSE, if used
+  +-- WebSocket endpoint, if used
+  +-- private authoritative state in server memory/storage
+```
+
+The important distinction is:
+
+> **Serving the frontend from the game runtime does not make private server state public.**
+
+The runtime must serve only explicitly public built web artifacts. Server source, private data, credentials, RNG state, hidden cards/tiles, room secrets, host capabilities, and other authoritative information must remain outside the public static root and reach browsers only through deliberate game-owned projections or responses.
+
+Do not expose a repository root as a static directory. Prefer a dedicated build output such as:
+
+```text
+packages/web/dist/
+```
+
+or another explicit public artifact directory.
+
+Frontend builds must also avoid accidentally bundling private values. Shared protocol **types** or public constants are fine; server-only secrets/data must not become runtime imports of browser bundles.
+
+### Existing-game lesson: Pirate Island
+
+Pirate Island is already close to this shape: one LAN server serves a bounded web build directory, JSON room APIs, SSE state updates, and `/healthz`, and its CLI already reads `HOST` and `PORT`.
+
+Its Nexus adaptation is mainly an outer-seam change: `BASE_PATH`/URL hygiene and final production-runtime behavior, not a rewrite of its room or transport model.
+
+### Existing-game lesson: Captain Flip / Flippin Stories
+
+Captain Flip's current development topology uses Vite for the browser assets and a separate authoritative WebSocket process. Vite proxies same-origin `/ws` traffic during development.
+
+For Nexus production, the intended adaptation is to serve the already-built public frontend from the supervised game runtime and expose the game's WebSocket endpoint on the same private port. This removes a development process; it does **not** weaken Captain Flip's hidden-information boundary.
+
+Captain Flip already keeps its private seed, bag order, hidden tile/cell backs, and other authoritative information server-side and sends deliberately redacted public state to clients. That separation should be preserved.
 
 ## Do not design around a fixed public host or port
 
@@ -70,7 +150,7 @@ BASE_PATH=/games/<game-id>
 
 Plan so the production/Nexus runtime can honor those values.
 
-Avoid assumptions such as:
+Avoid production assumptions such as:
 
 ```text
 localhost:3000
@@ -79,9 +159,9 @@ localhost:3000
 /api at the origin root
 ```
 
-Those may be fine for local development, but the Nexus runtime must not depend on them.
+Those may be convenient during development, but the Nexus runtime must not depend on them.
 
-## BASE_PATH is the main browser-facing constraint
+## BASE_PATH and same-origin behavior
 
 A game mounted at:
 
@@ -105,91 +185,71 @@ This includes:
 
 Prefer deriving URLs from the current document/base URL or a single base-path helper instead of scattering root-absolute strings such as `/api/...` or `/assets/...` throughout the client.
 
+The emerging stricter direction is that the browser should use **same-origin** URLs in Nexus mode. A game should not need to know Nexus's LAN/public hostname, TLS termination, Cloudflare setup, or internal private port.
+
 ### Existing-game lesson: Pirate Island
 
-Pirate Island is already close to the desired runtime shape: one LAN server serves static files, a JSON room API, SSE state updates, and `/healthz`, and its CLI already reads `HOST` and `PORT`. Its current browser code and HTML use root-absolute asset/API paths, so base-path adaptation should focus on URL generation rather than changing its room or transport model.
+Pirate Island's current browser code and HTML use several root-absolute asset/API paths. Those need base-path adaptation, but its HTTP/SSE protocol can remain intact.
 
-This is the kind of adaptation Nexus should encourage: fix the outer URL seam, not rewrite working game architecture.
+### Existing-game lesson: Captain Flip
 
-## Transport is game-owned
+Captain Flip already has a useful same-origin WebSocket pattern: the browser derives `ws:`/`wss:` from the current page origin and connects to `/ws`. The Nexus adaptation should preserve the same-origin property while making the endpoint base-path-safe.
 
-Nexus must support ordinary browser transports without requiring games to adopt one protocol.
+## Standardize behavior, not transport choice
 
-Valid designs include:
+Nexus must support ordinary browser transports without requiring every game to adopt the same transport.
+
+Valid designs may include:
 
 - request/response HTTP APIs;
 - Server-Sent Events;
 - WebSockets;
 - combinations of the above.
 
-The game owns payload formats and semantics. Nexus proxies traffic but should not interpret game messages.
+The contract may become stricter about **what the transport must achieve**—for example base-path safety, reconnect behavior, message-size safety, and clean shutdown—without forcing every game to use WebSockets or every game to use SSE.
 
-### Existing-game lesson: Pirate Island
+The game owns payload formats and game semantics. Nexus proxies traffic but should not interpret game messages.
 
-Pirate Island uses:
+Pirate Island currently uses HTTP plus SSE. Captain Flip currently uses an authoritative WebSocket protocol. Both remain valid implementation choices.
 
-```text
-HTTP POST/GET
-+
-SSE for live state
-```
+## Sessions, lobbies, and reconnect semantics
 
-That is a valid Nexus architecture.
+The exact room protocol should remain game-owned, but the common user-facing behavior deserves stronger standardization than the first draft assumed.
 
-### Existing-game lesson: Captain Flip / Flippin Stories
+For multiplayer games with durable player seats/sessions, candidate common expectations include:
 
-Captain Flip currently uses an authoritative WebSocket server. The phone and board clients connect to same-origin `/ws`, reconnect automatically, and re-send stored seat identity where appropriate. This is also a valid Nexus architecture.
+- a player can reach the game through its normal Nexus entrypoint and create/join the relevant game session;
+- a transient transport disconnect does not itself destroy the player's seat;
+- refreshing/reopening the browser can reclaim an existing seat/session when the game still exists;
+- reconnect recovers authoritative current state rather than relying on the old TCP/WebSocket/SSE connection to survive;
+- room/session/player identifiers remain opaque to Nexus;
+- the game, not Nexus, decides admission, room lifecycle, host/player roles, and game-specific authorization.
 
-Nexus compatibility should not require converting one game to the other's transport.
-
-## Rooms and lobbies belong to the game
-
-Games may choose their own model, including:
-
-- create-room then share a code;
-- one room generated when the runtime starts;
-- multiple rooms hosted by one runtime;
-- browseable open rooms;
-- explicit host admission;
-- reconnect/session tokens;
-- no room concept at all.
-
-Nexus may show that a game process is running. It should not need to know which in-game rooms exist or who belongs to them.
+The mechanism remains game-owned. Nexus does not need every game to use the same room-code format, token shape, storage key, or handshake packet.
 
 ### Existing-game examples
 
-Pirate Island exposes room creation and join endpoints and lets the host start the room.
+Pirate Island exposes room creation/join endpoints, stores a player session identity, and reconnects live state through SSE.
 
-Captain Flip currently creates a server-owned room code, allows phones to browse/join hosted tables, stores player reconnect tokens in local storage, and keeps its TV host capability separate from ordinary player identity.
+Captain Flip supports room browsing/join, stores player reconnect tokens, retries WebSockets with backoff, and receives full authoritative state after reconnect. Its TV host capability is deliberately separate from ordinary player identity.
 
-Both patterns should remain possible.
+These are different mechanisms implementing similar useful behavior.
 
-## Server-authoritative games are encouraged, not mandated
+## Server authority and hidden information
 
-Both current games keep important state and legality on the server side. That is a strong pattern for shared-device games because:
+Both current games are server-authoritative: browsers send player choices/intents and the server owns legality/shared state.
 
-- reconnect is simpler;
+That gives useful properties for the class of games Nexus currently targets:
+
 - hidden information can stay off clients;
-- clients can remain presentation/input surfaces;
-- one source decides legal state transitions.
+- reconnect can restore authoritative state;
+- browser clients can remain presentation/input surfaces;
+- one source decides legal shared-state transitions;
+- curious browser clients cannot learn server-only state merely by inspecting JavaScript messages.
 
-A new game does not have to copy either engine architecture, but if players can affect shared state, decide deliberately where authority lives.
+Whether **server-authoritative shared state becomes a mandatory Nexus game-contract rule** is intentionally left for tomorrow's discussion. It is a strong candidate because both current games already fit it and future multiplayer tabletop games are likely to benefit, but it is a game-design constraint rather than merely a runtime constraint and should therefore be chosen deliberately.
 
-## Reconnect and refresh should be normal events
-
-Phones lock, browsers refresh, Wi-Fi changes, and WebSockets/SSE reconnect.
-
-Plan for recovery where the game needs it.
-
-Useful patterns already present in the current games include:
-
-- localStorage-held non-admin player/session identity;
-- reconnect tokens that reclaim an existing seat;
-- full state snapshots after reconnect;
-- transport retry/backoff;
-- disconnected/away state that does not immediately destroy the room.
-
-Nexus should not own these tokens or reconnect rules.
+Regardless of that future decision, any game that claims information is hidden from a player must enforce that boundary on the server side. Hiding HTML/CSS elements is not a secrecy mechanism.
 
 ## TV-less play is mandatory; dedicated displays remain optional
 
@@ -206,21 +266,9 @@ host/player combined view
 one browser passed around
 ```
 
-If a dedicated display currently carries required information or controls, adaptation planning must provide that information/control through the player/host experience as well.
+If a dedicated display carries required information or controls, adaptation planning must provide equivalent access through the no-TV experience as well.
 
-### Existing-game impact
-
-Pirate Island is already phone-first and naturally fits this requirement.
-
-Captain Flip currently has distinct TV board and phone clients and therefore needs a Nexus adaptation that preserves the useful dedicated display while making it optional for complete play. That should be an adapter/product change inside the game, not special Captain Flip behavior inside Nexus.
-
-## One Nexus-visible runtime
-
-Development tooling may use multiple processes. The Nexus launch path should not.
-
-Captain Flip currently runs a Vite frontend process plus a separate WebSocket process during development. Its Nexus adaptation should package/serve the built frontend and WebSocket endpoint behind one supervised runtime/port.
-
-Do not infer from this that every game must use the same web server or build system. The requirement is only that Nexus sees one launch/health/stop boundary.
+Pirate Island is already phone-first. Captain Flip currently has distinct TV board and phone clients, so its Nexus adaptation should preserve the useful board view while making it optional for complete play. That belongs inside Captain Flip, not as special Captain Flip logic in Nexus.
 
 ## Health endpoint
 
@@ -234,6 +282,8 @@ Expose the manifest-declared health path with these properties:
 - no sensitive runtime data.
 
 If the frontend must be built or data loaded at startup, do not report healthy until those prerequisites are usable.
+
+A possible future generic Nexus status surface beyond health—such as approximate room/player/session counts—is **not decided**. It should be considered only if Nexus genuinely needs game-reported semantic information that cannot be safely derived at the proxy/runtime layer.
 
 ## Shutdown and process behavior
 
@@ -299,14 +349,17 @@ The initial remote-deployment model plans around Nexus plus **one active game ru
 When a new game is being planned for Nexus, answer these questions and copy the applicable answers into that game's own plan/requirements:
 
 - What command will Nexus launch?
-- Can it run as one supervised process/port?
+- Can production run as one supervised process/port?
 - Does it honor `HOST`, `PORT`, and `BASE_PATH`?
 - What health endpoint indicates actual readiness?
+- Does the production runtime serve only an explicit public frontend build directory?
+- What data/state must remain server-only, and how is its public projection/redaction enforced?
 - Which browser transports does it use: HTTP, SSE, WebSocket?
-- Are every asset/API/transport URL and redirect compatible with `BASE_PATH`?
+- Are every asset/API/transport URL and redirect compatible with `BASE_PATH` and same-origin Nexus hosting?
 - How are rooms/lobbies owned by the game?
 - What happens when a phone reloads or reconnects?
-- Where does game authority/hidden state live?
+- Can an existing seat/session be recovered without the previous network connection surviving?
+- Where does shared game authority live?
 - Is the complete game playable with no dedicated display?
 - If a dedicated display exists, how does the no-TV mode replace its required information/controls?
 - Does graceful shutdown release all listeners/helpers?
@@ -324,25 +377,46 @@ A future reusable Nexus compatibility fixture/harness should be able to establis
 - static asset loading beneath `BASE_PATH`;
 - game API traffic beneath `BASE_PATH`;
 - WebSocket or SSE behavior when used;
-- refresh/deep-link behavior where supported;
+- same-origin browser behavior under HTTP and eventual HTTPS proxying;
+- refresh/reconnect behavior for games with durable sessions;
 - redirect/link behavior;
+- public static-root containment (private/server files are not browser-reachable);
 - graceful shutdown and port release;
 - complete TV-less play path at the game-specific verification layer.
 
 The test harness should verify the integration seam, not game rules.
 
-## What not to standardize prematurely
+## What should remain game-owned unless Nexus has a reason to care
 
-Do not add to `GAME-CONTRACT.md` merely because one current game uses it:
+Do not standardize an implementation detail merely because one or two games currently use it.
 
-- a particular room-code format;
-- a particular reconnect-token format;
-- REST versus WebSocket versus SSE;
-- server-authoritative reducer architecture;
-- host capabilities;
-- dedicated-display URLs;
-- Vite, Node, npm, pnpm, or a frontend framework;
+Likely game-owned details include:
+
+- exact room-code format;
+- exact reconnect-token format;
+- exact HTTP/SSE/WebSocket message schema;
+- game-specific actions/intents/events;
+- engine/reducer structure;
+- exact host-capability representation;
+- frontend framework/build tool/package manager;
 - persistence technology;
-- game-specific rate limits or message schemas.
+- game-specific rate limits and payload limits beyond Nexus-wide safety ceilings.
 
-Promote something into the normative contract only when Nexus genuinely needs it to launch, route, supervise, or safely expose independent games.
+The key test is:
+
+> **Would having every future Nexus game obey this rule materially simplify launching, routing, supervising, recovering, securing, testing, or operating the platform?**
+
+If yes, consider standardizing the behavior now while migration cost is low. If no, leave it game-owned.
+
+## Tomorrow's contract review queue
+
+Before further game-adapter work, revisit this guide and decide at least:
+
+1. Which candidate behaviors become mandatory in the next `GAME-CONTRACT.md` revision?
+2. Should server-authoritative shared state be a Nexus compatibility requirement or strong guidance?
+3. How strict should reconnect/session recovery semantics be?
+4. Does every multiplayer Nexus game need a create/join/session concept, or must games with no room concept remain first-class?
+5. Should Nexus ever consume a tiny generic game-reported status surface beyond health, or should room/player telemetry remain proxy-derived/game-private?
+6. Which compatibility checks belong in a reusable Nexus harness versus each game's own verifier?
+
+The aim is to make the contract stricter **before** there are many games, without turning Nexus into a framework that understands how those games work.
