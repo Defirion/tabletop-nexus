@@ -29,8 +29,13 @@ function cloneManifest(overrides = {}) {
   };
 }
 
+function manifestWithHealthPath(healthPath) {
+  return cloneManifest({ runtime: { command: "node", args: [], healthPath } });
+}
+
 test("parseManifest accepts the schema-1 baseline", () => {
   assert.equal(parseManifest(cloneManifest()).id, "fixture-game");
+  assert.equal(parseManifest(manifestWithHealthPath("/healthz")).runtime.healthPath, "/healthz");
 });
 
 test("parseManifest rejects missing TV-less support", () => {
@@ -40,16 +45,27 @@ test("parseManifest rejects missing TV-less support", () => {
   );
 });
 
-test("parseManifest rejects invalid player ranges and health URLs", () => {
+test("parseManifest rejects invalid player ranges", () => {
   assert.throws(() => parseManifest(cloneManifest({ players: { min: 4, max: 2 } })), /max must be >=/);
-  assert.throws(
-    () => parseManifest(cloneManifest({ runtime: { command: "node", args: [], healthPath: "//other-host/healthz" } })),
-    /local absolute path/,
-  );
-  assert.throws(
-    () => parseManifest(cloneManifest({ runtime: { command: "node", args: [], healthPath: "/healthz?ready=1" } })),
-    /local absolute path/,
-  );
+});
+
+test("parseManifest rejects explicit non-local health URL forms", () => {
+  for (const healthPath of ["healthz", "//other-host/healthz", "/healthz?ready=1", "/healthz#ready"]) {
+    assert.throws(() => parseManifest(manifestWithHealthPath(healthPath)), /local absolute path/);
+  }
+});
+
+test("parseManifest rejects health paths that normalize into authority or network-path forms", () => {
+  for (const healthPath of [
+    "/\\evil/healthz",
+    "/\t/evil/healthz",
+    "/\n/evil/healthz",
+    "/../\\evil/healthz",
+    "/%2e%2e/\\evil/healthz",
+    "/\\health-check-a.invalid/healthz",
+  ]) {
+    assert.throws(() => parseManifest(manifestWithHealthPath(healthPath)), /local absolute path/);
+  }
 });
 
 test("loadLibrary treats a missing local config as an empty library", async () => {
