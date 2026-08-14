@@ -153,21 +153,23 @@ function Invoke-RepositoryChecks {
             'docs/ARCHITECTURE.md',
             'docs/PLAN.md',
             'src/registry.js',
+            'src/runtime/private-ports.js',
             'src/server.js',
             'public/index.html',
             'public/app.js',
             'public/styles.css',
             'scripts/verify-product.mjs',
+            'test/private-ports.test.js',
             'test/registry.test.js',
             'test/server.test.js',
             'test/verification-contract.test.js'
         )
         foreach ($file in $productRequired) {
             if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
-                throw "Required R0 product file is missing: $file"
+                throw "Required product file is missing: $file"
             }
         }
-        $Checks.Add('Required R0 product files are present.')
+        $Checks.Add('Required product files are present.')
 
         if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
             throw 'Node.js 22 or newer is required for product verification.'
@@ -179,10 +181,10 @@ function Invoke-RepositoryChecks {
         if (-not [version]::TryParse($nodeVersionText, [ref]$nodeVersion) -or $nodeVersion.Major -lt 22) {
             throw "Node.js 22 or newer is required; found $nodeText."
         }
-        $Checks.Add("Node.js runtime satisfies the R0 requirement ($nodeText).")
+        $Checks.Add("Node.js runtime satisfies the product requirement ($nodeText).")
 
         Invoke-External -Command 'node' -CommandArgs @('scripts/verify-product.mjs') | Out-Null
-        $Checks.Add('R0 product syntax checks and tests passed (`node scripts/verify-product.mjs`).')
+        $Checks.Add('Product syntax checks and tests passed (`node scripts/verify-product.mjs`).')
     }
     finally {
         Pop-Location

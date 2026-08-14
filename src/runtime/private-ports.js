@@ -34,6 +34,15 @@ function closeServer(server) {
   });
 }
 
+async function createPrivatePortProbe() {
+  const server = createServer();
+  const port = await listenOnEphemeralPort(server);
+  return {
+    port,
+    close: () => closeServer(server),
+  };
+}
+
 /**
  * Allocates loopback-only ports for one Nexus supervisor process.
  *
@@ -45,20 +54,28 @@ function closeServer(server) {
  */
 export class PrivatePortAllocator {
   #claimedPorts = new Set();
+  #createProbe;
+
+  constructor({ createProbe = createPrivatePortProbe } = {}) {
+    if (typeof createProbe !== "function") {
+      throw new TypeError("createProbe must be a function");
+    }
+    this.#createProbe = createProbe;
+  }
 
   async allocate() {
     while (true) {
-      const probe = createServer();
-      const port = await listenOnEphemeralPort(probe);
+      const probe = await this.#createProbe();
+      const { port } = probe;
 
       if (this.#claimedPorts.has(port)) {
-        await closeServer(probe);
+        await probe.close();
         continue;
       }
 
       this.#claimedPorts.add(port);
       try {
-        await closeServer(probe);
+        await probe.close();
       } catch (error) {
         this.#claimedPorts.delete(port);
         throw error;

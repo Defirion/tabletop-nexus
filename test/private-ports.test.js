@@ -17,6 +17,25 @@ async function close(server) {
   await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
 }
 
+function scriptedProbeFactory(ports) {
+  const attempts = [];
+  return {
+    attempts,
+    createProbe: async () => {
+      assert.ok(ports.length > 0, "scripted probe ran out of candidates");
+      const port = ports.shift();
+      const attempt = { port, closeCount: 0 };
+      attempts.push(attempt);
+      return {
+        port,
+        close: async () => {
+          attempt.closeCount += 1;
+        },
+      };
+    },
+  };
+}
+
 test("private port leases use loopback and remain unique while live", async () => {
   const allocator = new PrivatePortAllocator();
   const leases = await Promise.all(Array.from({ length: 24 }, () => allocator.allocate()));
@@ -34,6 +53,32 @@ test("private port leases use loopback and remain unique while live", async () =
       lease.release();
     }
   }
+});
+
+test("allocator rejects a replayed live candidate after probe release and accepts it after lease release", async () => {
+  const probes = scriptedProbeFactory([41001, 41001, 41002, 41001]);
+  const allocator = new PrivatePortAllocator({ createProbe: probes.createProbe });
+
+  const first = await allocator.allocate();
+  assert.equal(first.port, 41001);
+  assert.equal(probes.attempts[0].closeCount, 1);
+
+  const second = await allocator.allocate();
+  assert.equal(second.port, 41002);
+  assert.deepEqual(
+    probes.attempts.slice(0, 3).map(({ port }) => port),
+    [41001, 41001, 41002],
+  );
+  assert.equal(probes.attempts[1].closeCount, 1);
+  assert.equal(probes.attempts[2].closeCount, 1);
+
+  assert.equal(first.release(), true);
+  const reused = await allocator.allocate();
+  assert.equal(reused.port, 41001);
+  assert.equal(probes.attempts[3].closeCount, 1);
+
+  assert.equal(second.release(), true);
+  assert.equal(reused.release(), true);
 });
 
 test("allocator does not select a port that is already bound on the private host", async (t) => {

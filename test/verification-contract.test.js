@@ -34,6 +34,20 @@ test("repository checks accept an initially empty shared check list and retain s
   assert.doesNotMatch(verifier, /return \$checks/);
 });
 
+test("canonical verifier requires R1 private-port source and focused regression coverage", async () => {
+  const verifier = await read("verify.ps1");
+  const requiredMatch = verifier.match(/\$productRequired = @\(([\s\S]*?)\n\s*\)/);
+
+  assert.ok(requiredMatch, "productRequired block must remain explicit");
+  assert.match(requiredMatch[1], /'src\/runtime\/private-ports\.js'/);
+  assert.match(requiredMatch[1], /'test\/private-ports\.test\.js'/);
+  assert.match(verifier, /Required product file is missing:/);
+  assert.match(verifier, /\$Checks\.Add\('Required product files are present\.'\)/);
+  assert.match(verifier, /Node\.js runtime satisfies the product requirement/);
+  assert.match(verifier, /Product syntax checks and tests passed/);
+  assert.doesNotMatch(verifier, /Required R0 product|R0 requirement|R0 product syntax checks/);
+});
+
 test("verification reports emit stable unstyled machine-readable SHA and outcome fields", async () => {
   const verifier = await read("verify.ps1");
 
