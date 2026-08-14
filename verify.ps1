@@ -2,7 +2,11 @@
 
 param(
     [int]$Pr = 0,
-    [switch]$Isolated
+    [switch]$Isolated,
+    [Parameter(DontShow = $true)][string]$BoundTargetSha = '',
+    [Parameter(DontShow = $true)][ValidateSet('', 'pr', 'main')][string]$BoundTargetKind = '',
+    [Parameter(DontShow = $true)][string]$ReportRoot = '',
+    [Parameter(DontShow = $true)][ValidateSet('', 'normal', 'isolated')][string]$BoundMode = ''
 )
 
 Set-StrictMode -Version Latest
@@ -42,6 +46,21 @@ function Invoke-Git {
 function Invoke-Gh {
     param([Parameter(Mandatory = $true)][string[]]$CommandArgs)
     return Invoke-External -Command 'gh' -CommandArgs $CommandArgs
+}
+
+function Get-ScriptRepositoryRoot {
+    $scriptDir = Split-Path -Parent $PSCommandPath
+    return Invoke-Git -CommandArgs @('-C', $scriptDir, 'rev-parse', '--show-toplevel')
+}
+
+function Assert-CanonicalVerifierPath {
+    param([Parameter(Mandatory = $true)][string]$RepoRoot)
+
+    $expected = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot 'verify.ps1'))
+    $actual = [System.IO.Path]::GetFullPath($PSCommandPath)
+    if ($actual -ne $expected) {
+        throw "Verifier must execute from the selected repository's canonical verify.ps1: $expected"
+    }
 }
 
 function Assert-CleanTrackedState {
@@ -111,9 +130,106 @@ function Get-HumanVerificationHandoff {
     }
 }
 
+function Get-GitHubTarget {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [int]$RequestedPr = 0,
+        [ValidateSet('', 'pr', 'main')][string]$ExpectedKind = '',
+        [string]$ExpectedSha = ''
+    )
+
+    Push-Location $RepoRoot
+    try {
+        $repoInfo = (Invoke-Gh -CommandArgs @('repo', 'view', '--json', 'nameWithOwner,defaultBranchRef')) | ConvertFrom-Json
+        $defaultBranch = $repoInfo.defaultBranchRef.name
+        if (-not $defaultBranch) {
+            throw 'Could not resolve the repository default branch from GitHub.'
+        }
+
+        $selectedPr = $null
+        if ($ExpectedKind -eq 'pr') {
+            if ($RequestedPr -le 0) {
+                throw 'Target-bound PR verification requires the selected PR number.'
+            }
+            $selectedPr = $RequestedPr
+        }
+        elseif ($ExpectedKind -eq 'main') {
+            if ($RequestedPr -gt 0) {
+                throw 'Target-bound default-branch verification cannot include a PR number.'
+            }
+        }
+        elseif ($RequestedPr -gt 0) {
+            $selectedPr = $RequestedPr
+        }
+        else {
+            $openPrs = @((Invoke-Gh -CommandArgs @('pr', 'list', '--state', 'open', '--limit', '100', '--json', 'number,title,headRefOid')) | ConvertFrom-Json)
+            if ($openPrs.Count -eq 1) {
+                $selectedPr = [int]$openPrs[0].number
+            }
+            elseif ($openPrs.Count -gt 1) {
+                Write-Host 'Several open PRs exist:'
+                foreach ($item in $openPrs) {
+                    Write-Host ("  #{0} {1}" -f $item.number, $item.title)
+                }
+                $choice = Read-Host 'PR number to verify'
+                $parsed = 0
+                if (-not [int]::TryParse($choice, [ref]$parsed) -or $parsed -le 0) {
+                    throw 'A valid PR number is required.'
+                }
+                $selectedPr = $parsed
+            }
+        }
+
+        if ($selectedPr) {
+            $prInfo = (Invoke-Gh -CommandArgs @('pr', 'view', "$selectedPr", '--json', 'number,state,headRefOid,body')) | ConvertFrom-Json
+            if ($prInfo.state -ne 'OPEN') {
+                throw "PR #$selectedPr is not open."
+            }
+
+            $targetKind = 'pr'
+            $targetLabel = "PR #$selectedPr"
+            $targetSha = $prInfo.headRefOid
+            $prBody = [string]$prInfo.body
+
+            Invoke-Git -CommandArgs @('fetch', 'origin', "pull/$selectedPr/head") | Out-Null
+            $fetchedSha = Invoke-Git -CommandArgs @('rev-parse', 'FETCH_HEAD')
+            if ($fetchedSha -ne $targetSha) {
+                throw "Fetched PR head $fetchedSha does not match GitHub head $targetSha."
+            }
+        }
+        else {
+            $targetKind = 'main'
+            $targetLabel = $defaultBranch
+            $prBody = $null
+            Invoke-Git -CommandArgs @('fetch', 'origin', $defaultBranch) | Out-Null
+            $targetSha = Invoke-Git -CommandArgs @('rev-parse', "origin/$defaultBranch")
+        }
+
+        if ($ExpectedKind -and $targetKind -ne $ExpectedKind) {
+            throw "Selected target kind changed from $ExpectedKind to $targetKind."
+        }
+        if ($ExpectedSha -and $targetSha -ne $ExpectedSha) {
+            throw "Selected GitHub target moved from $ExpectedSha to $targetSha before checks began."
+        }
+
+        return [pscustomobject]@{
+            Kind = $targetKind
+            Label = $targetLabel
+            Sha = $targetSha
+            SelectedPr = $selectedPr
+            DefaultBranch = $defaultBranch
+            PrBody = $prBody
+        }
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 function Invoke-RepositoryChecks {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$TargetSha,
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Checks
     )
 
@@ -183,11 +299,267 @@ function Invoke-RepositoryChecks {
         }
         $Checks.Add("Node.js runtime satisfies the product requirement ($nodeText).")
 
-        Invoke-External -Command 'node' -CommandArgs @('scripts/verify-product.mjs') | Out-Null
-        $Checks.Add('Product syntax checks and tests passed (`node scripts/verify-product.mjs`).')
+        Invoke-External -Command 'node' -CommandArgs @('scripts/verify-product.mjs', '--canonical-target', $TargetSha) | Out-Null
+        $Checks.Add('Product syntax checks and tests passed (`node scripts/verify-product.mjs --canonical-target <SHA>`).')
     }
     finally {
         Pop-Location
+    }
+}
+
+function Write-VerificationReport {
+    param(
+        [Parameter(Mandatory = $true)][string]$ReportRoot,
+        [Parameter(Mandatory = $true)][string]$TargetLabel,
+        [Parameter(Mandatory = $true)][string]$TargetSha,
+        [Parameter(Mandatory = $true)][string]$Mode,
+        [Parameter(Mandatory = $true)][string]$PowerShellVersion,
+        [Parameter(Mandatory = $true)][string]$Outcome,
+        [Parameter(Mandatory = $true)][string]$Freshness,
+        [Parameter(Mandatory = $true)][string]$FinalTrackedState,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Checks,
+        [string]$Failure = '',
+        [Parameter(Mandatory = $true)][string]$HumanVerification,
+        [Parameter(Mandatory = $true)][string]$HumanState,
+        [Parameter(Mandatory = $true)][string]$TargetKind
+    )
+
+    $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmssZ')
+    $shortSha = $TargetSha.Substring(0, 12)
+    $reportDir = Join-Path $ReportRoot '.local/pr-verification'
+    New-Item -ItemType Directory -Path $reportDir -Force | Out-Null
+    $reportPath = Join-Path $reportDir ("$stamp-$shortSha.md")
+    $latestPath = Join-Path $reportDir 'latest.md'
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add('# Local verification report')
+    $lines.Add('')
+    $lines.Add("- Target: $TargetLabel")
+    $lines.Add("- Tested SHA: $TargetSha")
+    $lines.Add("- Verifier source SHA: $TargetSha")
+    $lines.Add("- Mode: $Mode")
+    $lines.Add("- PowerShell: $PowerShellVersion")
+    $lines.Add("- Timestamp: $timestamp")
+    $lines.Add("- Automated outcome: $Outcome")
+    $lines.Add("- Target freshness: $Freshness")
+    $lines.Add("- Final tracked/staged state: $FinalTrackedState")
+    $lines.Add('')
+    $lines.Add('## Automated checks')
+    $lines.Add('')
+    if ($Checks.Count -eq 0) {
+        $lines.Add('- None completed.')
+    }
+    else {
+        foreach ($check in $Checks) {
+            $lines.Add("- PASS - $check")
+        }
+    }
+    if ($Failure) {
+        $lines.Add('')
+        $lines.Add('## Failure / limitation')
+        $lines.Add('')
+        $lines.Add('```text')
+        $lines.Add($Failure)
+        $lines.Add('```')
+    }
+    $lines.Add('')
+    $lines.Add('## Human verification required')
+    $lines.Add('')
+    $lines.Add($HumanVerification)
+    $lines.Add('')
+    $lines.Add('## Handoff')
+    $lines.Add('')
+    if ($Outcome -eq 'PASS' -and $TargetKind -eq 'pr' -and $HumanState -eq 'None') {
+        $lines.Add('Automated gate complete for the exact fresh PR SHA. Human verification is `None`; the PR is ready for independent Review.')
+    }
+    elseif ($Outcome -eq 'PASS' -and $TargetKind -eq 'pr' -and $HumanState -eq 'INVALID') {
+        $lines.Add('Automated gate complete, but the PR handoff is invalid. Correct `## Human verification required` before Review.')
+    }
+    elseif ($Outcome -eq 'PASS' -and $TargetKind -eq 'pr') {
+        $lines.Add('Automated gate complete. Declared human verification remains a separate gate before merge readiness.')
+    }
+    elseif ($Outcome -eq 'PASS') {
+        $lines.Add('Default-branch automated gate complete for the exact fresh SHA.')
+    }
+    elseif ($Outcome -eq 'STALE') {
+        $lines.Add('Target moved during verification. This evidence is stale and must not be used.')
+    }
+    else {
+        $lines.Add('Automated gate failed. Fix the reported issue and verify the resulting new SHA.')
+    }
+
+    $lines | Set-Content -LiteralPath $reportPath -Encoding UTF8
+    Copy-Item -LiteralPath $reportPath -Destination $latestPath -Force
+    return $latestPath
+}
+
+function Invoke-BoundVerification {
+    if (-not $BoundTargetSha -or $BoundTargetSha -notmatch '^[0-9a-fA-F]{40}$') {
+        throw 'Target-bound verification requires -BoundTargetSha with a full 40-character SHA.'
+    }
+    if (-not $BoundTargetKind) {
+        throw 'Target-bound verification requires -BoundTargetKind.'
+    }
+    if (-not $BoundMode) {
+        throw 'Target-bound verification requires -BoundMode.'
+    }
+    if (-not $ReportRoot) {
+        throw 'Target-bound verification requires -ReportRoot.'
+    }
+
+    $repoRoot = Get-ScriptRepositoryRoot
+    Set-Location $repoRoot
+    Assert-CanonicalVerifierPath -RepoRoot $repoRoot
+
+    $checkedOutSha = Invoke-Git -CommandArgs @('rev-parse', 'HEAD')
+    if ($checkedOutSha -ne $BoundTargetSha) {
+        throw "Target-bound verifier checkout is $checkedOutSha, expected $BoundTargetSha."
+    }
+    Assert-CleanTrackedState -Path $repoRoot
+
+    $target = Get-GitHubTarget -RepoRoot $repoRoot -RequestedPr $Pr -ExpectedKind $BoundTargetKind -ExpectedSha $BoundTargetSha
+    $humanVerification = 'Not applicable for default-branch verification.'
+    $humanState = 'N/A'
+    if ($target.Kind -eq 'pr') {
+        $humanHandoff = Get-HumanVerificationHandoff -Body $target.PrBody
+        $humanState = $humanHandoff.State
+        $humanVerification = $humanHandoff.Content
+    }
+
+    $checks = New-Object System.Collections.Generic.List[string]
+    $checks.Add("Verifier logic loaded from tested target SHA ($BoundTargetSha).")
+    $failure = $null
+    $freshness = 'NOT CHECKED'
+    $finalTrackedState = 'NOT CHECKED'
+
+    try {
+        Invoke-RepositoryChecks -Path $repoRoot -TargetSha $BoundTargetSha -Checks $checks
+
+        Push-Location $repoRoot
+        try {
+            $tracked = Invoke-Git -CommandArgs @('status', '--porcelain', '--untracked-files=no')
+            if ($tracked) {
+                $finalTrackedState = $tracked
+                throw "Verification left tracked/staged changes:`n$tracked"
+            }
+            $finalTrackedState = 'clean'
+        }
+        finally {
+            Pop-Location
+        }
+    }
+    catch {
+        $failure = $_.Exception.Message
+    }
+
+    try {
+        if ($target.Kind -eq 'pr') {
+            $current = (Invoke-Gh -CommandArgs @('pr', 'view', "$($target.SelectedPr)", '--json', 'headRefOid,state')) | ConvertFrom-Json
+            if ($current.state -eq 'OPEN' -and $current.headRefOid -eq $BoundTargetSha) {
+                $freshness = 'FRESH'
+            }
+            else {
+                $freshness = 'STALE'
+            }
+        }
+        else {
+            Invoke-Git -CommandArgs @('fetch', 'origin', $target.DefaultBranch) | Out-Null
+            $currentSha = Invoke-Git -CommandArgs @('rev-parse', "origin/$($target.DefaultBranch)")
+            if ($currentSha -eq $BoundTargetSha) {
+                $freshness = 'FRESH'
+            }
+            else {
+                $freshness = 'STALE'
+            }
+        }
+    }
+    catch {
+        if (-not $failure) {
+            $failure = "Could not recheck GitHub target freshness: $($_.Exception.Message)"
+        }
+    }
+
+    $outcome = 'PASS'
+    if ($failure) {
+        $outcome = 'FAIL'
+    }
+    elseif ($freshness -ne 'FRESH') {
+        $outcome = 'STALE'
+    }
+
+    $powerShellVersion = $PSVersionTable.PSVersion.ToString()
+    $latestPath = Write-VerificationReport -ReportRoot ([System.IO.Path]::GetFullPath($ReportRoot)) -TargetLabel $target.Label -TargetSha $BoundTargetSha -Mode $BoundMode -PowerShellVersion $powerShellVersion -Outcome $outcome -Freshness $freshness -FinalTrackedState $finalTrackedState -Checks $checks -Failure $failure -HumanVerification $humanVerification -HumanState $humanState -TargetKind $target.Kind
+
+    Write-Host "Verification: $outcome"
+    Write-Host "Target: $($target.Label) @ $BoundTargetSha"
+    Write-Host "Verifier source: $BoundTargetSha"
+    Write-Host "PowerShell: $powerShellVersion"
+    Write-Host "Report: $latestPath"
+
+    if ($outcome -eq 'FAIL') { return 1 }
+    if ($outcome -eq 'STALE') { return 2 }
+    if ($target.Kind -eq 'pr' -and $humanState -eq 'INVALID') { return 3 }
+    return 0
+}
+
+function Invoke-Bootstrap {
+    $repoRoot = Get-ScriptRepositoryRoot
+    Set-Location $repoRoot
+    Assert-CanonicalVerifierPath -RepoRoot $repoRoot
+    Assert-CleanTrackedState -Path $repoRoot
+
+    $target = Get-GitHubTarget -RepoRoot $repoRoot -RequestedPr $Pr
+    $mode = if ($Isolated) { 'isolated' } else { 'normal' }
+    $verificationRoot = $repoRoot
+    $tempWorktree = $null
+
+    try {
+        if ($Isolated) {
+            $tempWorktree = Join-Path ([System.IO.Path]::GetTempPath()) ("tabletop-nexus-verify-" + [guid]::NewGuid().ToString('N'))
+            Invoke-Git -CommandArgs @('worktree', 'add', '--detach', $tempWorktree, $target.Sha) | Out-Null
+            $verificationRoot = $tempWorktree
+        }
+        elseif ($target.Kind -eq 'main') {
+            Invoke-Git -CommandArgs @('checkout', '--no-overwrite-ignore', $target.DefaultBranch) | Out-Null
+            Invoke-Git -CommandArgs @('merge', '--ff-only', '--no-overwrite-ignore', "origin/$($target.DefaultBranch)") | Out-Null
+        }
+        else {
+            Invoke-Git -CommandArgs @('checkout', '--no-overwrite-ignore', '--detach', $target.Sha) | Out-Null
+        }
+
+        Push-Location $verificationRoot
+        try {
+            $checkedOutSha = Invoke-Git -CommandArgs @('rev-parse', 'HEAD')
+        }
+        finally {
+            Pop-Location
+        }
+        if ($checkedOutSha -ne $target.Sha) {
+            throw "Verification checkout is $checkedOutSha, expected $($target.Sha)."
+        }
+        Assert-CleanTrackedState -Path $verificationRoot
+
+        $targetVerifier = Join-Path $verificationRoot 'verify.ps1'
+        if (-not (Test-Path -LiteralPath $targetVerifier -PathType Leaf)) {
+            throw "Selected target is missing canonical verifier: $targetVerifier"
+        }
+
+        $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
+        $boundPr = if ($target.SelectedPr) { [int]$target.SelectedPr } else { 0 }
+        & $pwsh -NoProfile -File $targetVerifier -Pr $boundPr -BoundTargetSha $target.Sha -BoundTargetKind $target.Kind -ReportRoot $repoRoot -BoundMode $mode
+        return $LASTEXITCODE
+    }
+    finally {
+        if ($tempWorktree) {
+            Set-Location $repoRoot
+            try {
+                Invoke-Git -CommandArgs @('worktree', 'remove', '--force', $tempWorktree) | Out-Null
+            }
+            catch {
+                Write-Warning "Could not remove temporary verification worktree: $($_.Exception.Message)"
+            }
+        }
     }
 }
 
@@ -198,239 +570,7 @@ if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
     throw 'GitHub CLI (gh) is required.'
 }
 
-$powerShellVersion = $PSVersionTable.PSVersion.ToString()
-$repoRoot = Invoke-Git -CommandArgs @('rev-parse', '--show-toplevel')
-Set-Location $repoRoot
-Assert-CleanTrackedState -Path $repoRoot
-
-$repoInfo = (Invoke-Gh -CommandArgs @('repo', 'view', '--json', 'nameWithOwner,defaultBranchRef')) | ConvertFrom-Json
-$defaultBranch = $repoInfo.defaultBranchRef.name
-if (-not $defaultBranch) {
-    throw 'Could not resolve the repository default branch from GitHub.'
+if ($BoundTargetSha) {
+    exit (Invoke-BoundVerification)
 }
-
-$targetKind = $null
-$targetLabel = $null
-$targetSha = $null
-$humanVerification = 'Not applicable for default-branch verification.'
-$humanState = 'N/A'
-$selectedPr = $null
-$prBody = $null
-
-if ($Pr -gt 0) {
-    $selectedPr = $Pr
-}
-else {
-    $openPrs = @((Invoke-Gh -CommandArgs @('pr', 'list', '--state', 'open', '--limit', '100', '--json', 'number,title,headRefOid')) | ConvertFrom-Json)
-    if ($openPrs.Count -eq 1) {
-        $selectedPr = [int]$openPrs[0].number
-    }
-    elseif ($openPrs.Count -gt 1) {
-        Write-Host 'Several open PRs exist:'
-        foreach ($item in $openPrs) {
-            Write-Host ("  #{0} {1}" -f $item.number, $item.title)
-        }
-        $choice = Read-Host 'PR number to verify'
-        $parsed = 0
-        if (-not [int]::TryParse($choice, [ref]$parsed) -or $parsed -le 0) {
-            throw 'A valid PR number is required.'
-        }
-        $selectedPr = $parsed
-    }
-}
-
-if ($selectedPr) {
-    $prInfo = (Invoke-Gh -CommandArgs @('pr', 'view', "$selectedPr", '--json', 'number,state,headRefOid,body')) | ConvertFrom-Json
-    if ($prInfo.state -ne 'OPEN') {
-        throw "PR #$selectedPr is not open."
-    }
-
-    $targetKind = 'pr'
-    $targetLabel = "PR #$selectedPr"
-    $targetSha = $prInfo.headRefOid
-    $prBody = [string]$prInfo.body
-
-    Invoke-Git -CommandArgs @('fetch', 'origin', "pull/$selectedPr/head") | Out-Null
-    $fetchedSha = Invoke-Git -CommandArgs @('rev-parse', 'FETCH_HEAD')
-    if ($fetchedSha -ne $targetSha) {
-        throw "Fetched PR head $fetchedSha does not match GitHub head $targetSha."
-    }
-
-    $humanHandoff = Get-HumanVerificationHandoff -Body $prBody
-    $humanState = $humanHandoff.State
-    $humanVerification = $humanHandoff.Content
-}
-else {
-    $targetKind = 'main'
-    $targetLabel = $defaultBranch
-    Invoke-Git -CommandArgs @('fetch', 'origin', $defaultBranch) | Out-Null
-    $targetSha = Invoke-Git -CommandArgs @('rev-parse', "origin/$defaultBranch")
-}
-
-$mode = if ($Isolated) { 'isolated' } else { 'normal' }
-$verificationRoot = $repoRoot
-$tempWorktree = $null
-$checks = New-Object System.Collections.Generic.List[string]
-$failure = $null
-$freshness = 'NOT CHECKED'
-$finalTrackedState = 'NOT CHECKED'
-
-try {
-    if ($Isolated) {
-        $tempWorktree = Join-Path ([System.IO.Path]::GetTempPath()) ("tabletop-nexus-verify-" + [guid]::NewGuid().ToString('N'))
-        Invoke-Git -CommandArgs @('worktree', 'add', '--detach', $tempWorktree, $targetSha) | Out-Null
-        $verificationRoot = $tempWorktree
-    }
-    elseif ($targetKind -eq 'main') {
-        Invoke-Git -CommandArgs @('checkout', '--no-overwrite-ignore', $defaultBranch) | Out-Null
-        Invoke-Git -CommandArgs @('merge', '--ff-only', '--no-overwrite-ignore', "origin/$defaultBranch") | Out-Null
-        $checkedOutSha = Invoke-Git -CommandArgs @('rev-parse', 'HEAD')
-        if ($checkedOutSha -ne $targetSha) {
-            throw "Default-branch checkout is $checkedOutSha, expected $targetSha."
-        }
-    }
-    else {
-        Invoke-Git -CommandArgs @('checkout', '--no-overwrite-ignore', '--detach', $targetSha) | Out-Null
-    }
-
-    Assert-CleanTrackedState -Path $verificationRoot
-    Invoke-RepositoryChecks -Path $verificationRoot -Checks $checks
-
-    Push-Location $verificationRoot
-    try {
-        $tracked = Invoke-Git -CommandArgs @('status', '--porcelain', '--untracked-files=no')
-        if ($tracked) {
-            $finalTrackedState = $tracked
-            throw "Verification left tracked/staged changes:`n$tracked"
-        }
-        $finalTrackedState = 'clean'
-    }
-    finally {
-        Pop-Location
-    }
-}
-catch {
-    $failure = $_.Exception.Message
-}
-
-try {
-    if ($targetKind -eq 'pr') {
-        $current = (Invoke-Gh -CommandArgs @('pr', 'view', "$selectedPr", '--json', 'headRefOid,state')) | ConvertFrom-Json
-        if ($current.state -eq 'OPEN' -and $current.headRefOid -eq $targetSha) {
-            $freshness = 'FRESH'
-        }
-        else {
-            $freshness = 'STALE'
-        }
-    }
-    else {
-        Invoke-Git -CommandArgs @('fetch', 'origin', $defaultBranch) | Out-Null
-        $currentSha = Invoke-Git -CommandArgs @('rev-parse', "origin/$defaultBranch")
-        if ($currentSha -eq $targetSha) {
-            $freshness = 'FRESH'
-        }
-        else {
-            $freshness = 'STALE'
-        }
-    }
-}
-catch {
-    if (-not $failure) {
-        $failure = "Could not recheck GitHub target freshness: $($_.Exception.Message)"
-    }
-}
-
-$outcome = 'PASS'
-if ($failure) {
-    $outcome = 'FAIL'
-}
-elseif ($freshness -ne 'FRESH') {
-    $outcome = 'STALE'
-}
-
-$timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-$stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmssZ')
-$shortSha = if ($targetSha) { $targetSha.Substring(0, 12) } else { 'unknown' }
-$reportDir = Join-Path $repoRoot '.local/pr-verification'
-New-Item -ItemType Directory -Path $reportDir -Force | Out-Null
-$reportPath = Join-Path $reportDir ("$stamp-$shortSha.md")
-$latestPath = Join-Path $reportDir 'latest.md'
-
-$lines = New-Object System.Collections.Generic.List[string]
-$lines.Add('# Local verification report')
-$lines.Add('')
-$lines.Add("- Target: $targetLabel")
-$lines.Add("- Tested SHA: $targetSha")
-$lines.Add("- Mode: $mode")
-$lines.Add("- PowerShell: $powerShellVersion")
-$lines.Add("- Timestamp: $timestamp")
-$lines.Add("- Automated outcome: $outcome")
-$lines.Add("- Target freshness: $freshness")
-$lines.Add("- Final tracked/staged state: $finalTrackedState")
-$lines.Add('')
-$lines.Add('## Automated checks')
-$lines.Add('')
-if ($checks.Count -eq 0) {
-    $lines.Add('- None completed.')
-}
-else {
-    foreach ($check in $checks) {
-        $lines.Add("- PASS - $check")
-    }
-}
-if ($failure) {
-    $lines.Add('')
-    $lines.Add('## Failure / limitation')
-    $lines.Add('')
-    $lines.Add('```text')
-    $lines.Add($failure)
-    $lines.Add('```')
-}
-$lines.Add('')
-$lines.Add('## Human verification required')
-$lines.Add('')
-$lines.Add($humanVerification)
-$lines.Add('')
-$lines.Add('## Handoff')
-$lines.Add('')
-if ($outcome -eq 'PASS' -and $targetKind -eq 'pr' -and $humanState -eq 'None') {
-    $lines.Add('Automated gate complete for the exact fresh PR SHA. Human verification is `None`; the PR is ready for independent Review.')
-}
-elseif ($outcome -eq 'PASS' -and $targetKind -eq 'pr' -and $humanState -eq 'INVALID') {
-    $lines.Add('Automated gate complete, but the PR handoff is invalid. Correct `## Human verification required` before Review.')
-}
-elseif ($outcome -eq 'PASS' -and $targetKind -eq 'pr') {
-    $lines.Add('Automated gate complete. Declared human verification remains a separate gate before merge readiness.')
-}
-elseif ($outcome -eq 'PASS') {
-    $lines.Add('Default-branch automated gate complete for the exact fresh SHA.')
-}
-elseif ($outcome -eq 'STALE') {
-    $lines.Add('Target moved during verification. This evidence is stale and must not be used.')
-}
-else {
-    $lines.Add('Automated gate failed. Fix the reported issue and verify the resulting new SHA.')
-}
-
-$lines | Set-Content -LiteralPath $reportPath -Encoding UTF8
-Copy-Item -LiteralPath $reportPath -Destination $latestPath -Force
-
-if ($tempWorktree) {
-    Set-Location $repoRoot
-    try {
-        Invoke-Git -CommandArgs @('worktree', 'remove', '--force', $tempWorktree) | Out-Null
-    }
-    catch {
-        Write-Warning "Could not remove temporary verification worktree: $($_.Exception.Message)"
-    }
-}
-
-Write-Host "Verification: $outcome"
-Write-Host "Target: $targetLabel @ $targetSha"
-Write-Host "PowerShell: $powerShellVersion"
-Write-Host "Report: $latestPath"
-
-if ($outcome -eq 'FAIL') { exit 1 }
-if ($outcome -eq 'STALE') { exit 2 }
-if ($targetKind -eq 'pr' -and $humanState -eq 'INVALID') { exit 3 }
-exit 0
+exit (Invoke-Bootstrap)
