@@ -31,15 +31,18 @@ The verifier must:
 6. Recheck the GitHub target afterward. If it moved, the evidence is `STALE`.
 7. Write a timestamped ignored Markdown report under `.local/pr-verification/` and replace `.local/pr-verification/latest.md` with the newest report.
 
-## Current bootstrap gate
+## Current automated gate
 
-Before application tooling exists, the automated gate validates the workflow scaffold itself:
+The automated gate validates both workflow integrity and the R0 product baseline:
 
 - required Agent-Workflow files are present;
 - `docs/ai/BASELINE` contains the expected source plus a full 40-character commit SHA;
+- Node.js 22 or newer is available;
+- required R0 product files are present;
+- `npm run verify:local` passes, which syntax-checks the server/registry/portal JavaScript and runs the Node test suite;
 - the verification checkout remains free of tracked/staged changes.
 
-When product tooling is introduced, extend the automated checks in `verify.ps1` with the canonical tests/build/typecheck/smoke checks. **Do not change the verifier interface or evidence contract merely because the implementation stack changes.**
+R0 intentionally has no package dependencies, so verifier setup does not require `npm install`. When later milestones introduce dependencies or build tooling, extend `verify.ps1` with the repository's canonical install/build/typecheck/test/smoke commands while preserving this verifier interface and evidence contract.
 
 ## Role boundary
 

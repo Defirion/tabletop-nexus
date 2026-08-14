@@ -145,8 +145,43 @@ function Invoke-RepositoryChecks {
         }
         $checks.Add('Agent-Workflow baseline provenance marker is well formed.')
 
-        # Product checks belong here once application tooling exists. Preserve the
-        # verifier interface and evidence contract when extending this gate.
+        $productRequired = @(
+            'package.json',
+            'GAME-CONTRACT.md',
+            'docs/ARCHITECTURE.md',
+            'docs/PLAN.md',
+            'src/registry.js',
+            'src/server.js',
+            'public/index.html',
+            'public/app.js',
+            'public/styles.css',
+            'test/registry.test.js',
+            'test/server.test.js'
+        )
+        foreach ($file in $productRequired) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+                throw "Required R0 product file is missing: $file"
+            }
+        }
+        $checks.Add('Required R0 product files are present.')
+
+        if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+            throw 'Node.js 22 or newer is required for product verification.'
+        }
+        if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+            throw 'npm is required for product verification.'
+        }
+
+        $nodeText = Invoke-External -Command 'node' -CommandArgs @('--version')
+        $nodeVersionText = $nodeText -replace '^v', ''
+        $nodeVersion = $null
+        if (-not [version]::TryParse($nodeVersionText, [ref]$nodeVersion) -or $nodeVersion.Major -lt 22) {
+            throw "Node.js 22 or newer is required; found $nodeText."
+        }
+        $checks.Add("Node.js runtime satisfies the R0 requirement ($nodeText).")
+
+        Invoke-External -Command 'npm' -CommandArgs @('run', 'verify:local') | Out-Null
+        $checks.Add('R0 product syntax checks and tests passed (`npm run verify:local`).')
     }
     finally {
         Pop-Location

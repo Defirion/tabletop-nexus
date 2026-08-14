@@ -6,7 +6,7 @@ The project has one deliberately narrow responsibility:
 
 > **Nexus knows how to run games; Nexus does not know how games work.**
 
-Games remain independent applications and repositories. Tabletop Nexus will discover compatible games, launch and stop their local servers, check their health, and expose them behind one LAN-facing portal and port.
+Games remain independent applications and repositories. Tabletop Nexus discovers compatible games through a small manifest contract; later milestones launch, health-check, stop, and proxy those runtimes behind one LAN-facing portal and port.
 
 ## Goals
 
@@ -19,37 +19,79 @@ Games remain independent applications and repositories. Tabletop Nexus will disc
 
 ## Status
 
-**Workflow bootstrap.** The AI/GitHub development workflow is being established before application scaffolding begins. Product architecture, the game compatibility contract, runtime code, and adapters come after this baseline is reviewed and merged.
+**R0 platform baseline.** The schema-1 game contract, local library discovery/validation, browser-safe `/api/games` output, and a minimal portal are implemented. Process supervision (R1) and single-port game routing (R2) are deliberately not part of this baseline.
 
-## AI-assisted development workflow
+See [`docs/PLAN.md`](docs/PLAN.md) for roadmap status and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for component boundaries.
 
-GitHub is the shared state between independent Implementer, Verifier, and Reviewer runs:
-
-```text
-Task -> Implement -> PR -> Verify -> Review -> Merge
-                         ^         |
-                         +-- Fix <-+
-```
-
-Start with `AGENTS.md`. `VERIFICATION.md` defines the canonical local evidence contract; role-specific instructions live under `docs/ai/`.
-
-## Planned shape
+## Architecture
 
 ```text
 LAN clients
     |
     v
-Tabletop Nexus
-    |-- portal
-    |-- game registry/runtime status
-    |-- /games/<game-id>/... reverse proxy
+Tabletop Nexus :3000
+    |-- /                     portal
+    |-- /api/games            configured game metadata
+    |-- /games/<game-id>/...  reverse proxy (planned R2)
     |
-    +-- private game process A
-    +-- private game process B
+    +-- private game process A (planned R1)
+    +-- private game process B (planned R1)
 ```
 
-This is architectural intent only; application scaffolding has not started yet.
+Compatible games use the integration boundary in [`GAME-CONTRACT.md`](GAME-CONTRACT.md).
+
+## Local development
+
+Requires Node.js 22 or newer. R0 has no package dependencies.
+
+```bash
+cp nexus.config.example.json nexus.config.json
+npm start
+```
+
+On Windows PowerShell:
+
+```powershell
+Copy-Item nexus.config.example.json nexus.config.json
+npm start
+```
+
+The default Nexus address is `http://localhost:3000`. `HOST`, `PORT`, and `NEXUS_CONFIG` can override the local server settings. A missing `nexus.config.json` is valid and produces an empty library.
+
+## Adding a game locally
+
+A compatible game keeps `boardgame.json` at its repository root. Add that repository path to local `nexus.config.json`:
+
+```json
+{
+  "games": [
+    { "path": "../my-browser-game" }
+  ]
+}
+```
+
+Relative game paths are resolved from the config file's directory. The local config is gitignored. Game repositories and their content are not vendored into Nexus.
+
+## Verification
+
+Focused product checks:
+
+```bash
+npm run verify:local
+```
+
+Canonical repository verification remains:
+
+```powershell
+pwsh -NoProfile -File .\verify.ps1
+```
+
+The canonical verifier runs the product checks in addition to the Agent-Workflow scaffold checks. See [`VERIFICATION.md`](VERIFICATION.md).
+
+## AI-assisted development workflow
+
+GitHub is the shared state between independent Implementer, Verifier, and Reviewer runs. Start with [`AGENTS.md`](AGENTS.md).
 
 ## Licensing
 
-A project license has not been selected yet.
+A project license has not been selected yet. Until one is added, normal copyright applies to this repository's source code.
