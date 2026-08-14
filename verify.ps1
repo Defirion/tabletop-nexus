@@ -112,9 +112,11 @@ function Get-HumanVerificationHandoff {
 }
 
 function Invoke-RepositoryChecks {
-    param([Parameter(Mandatory = $true)][string]$Path)
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][System.Collections.Generic.List[string]]$Checks
+    )
 
-    $checks = New-Object System.Collections.Generic.List[string]
     Push-Location $Path
     try {
         $required = @(
@@ -132,7 +134,7 @@ function Invoke-RepositoryChecks {
                 throw "Required workflow file is missing: $file"
             }
         }
-        $checks.Add('Required Agent-Workflow files are present.')
+        $Checks.Add('Required Agent-Workflow files are present.')
 
         $baseline = Get-Content -LiteralPath 'docs/ai/BASELINE'
         $source = $baseline | Where-Object { $_ -like 'source=*' } | Select-Object -First 1
@@ -143,7 +145,7 @@ function Invoke-RepositoryChecks {
         if (-not $commit -or ($commit.Substring(7) -notmatch '^[0-9a-fA-F]{40}$')) {
             throw 'docs/ai/BASELINE must contain commit=<full 40-character SHA>.'
         }
-        $checks.Add('Agent-Workflow baseline provenance marker is well formed.')
+        $Checks.Add('Agent-Workflow baseline provenance marker is well formed.')
 
         $productRequired = @(
             'package.json',
@@ -155,21 +157,20 @@ function Invoke-RepositoryChecks {
             'public/index.html',
             'public/app.js',
             'public/styles.css',
+            'scripts/verify-product.mjs',
             'test/registry.test.js',
-            'test/server.test.js'
+            'test/server.test.js',
+            'test/verification-contract.test.js'
         )
         foreach ($file in $productRequired) {
             if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
                 throw "Required R0 product file is missing: $file"
             }
         }
-        $checks.Add('Required R0 product files are present.')
+        $Checks.Add('Required R0 product files are present.')
 
         if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
             throw 'Node.js 22 or newer is required for product verification.'
-        }
-        if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-            throw 'npm is required for product verification.'
         }
 
         $nodeText = Invoke-External -Command 'node' -CommandArgs @('--version')
@@ -178,16 +179,14 @@ function Invoke-RepositoryChecks {
         if (-not [version]::TryParse($nodeVersionText, [ref]$nodeVersion) -or $nodeVersion.Major -lt 22) {
             throw "Node.js 22 or newer is required; found $nodeText."
         }
-        $checks.Add("Node.js runtime satisfies the R0 requirement ($nodeText).")
+        $Checks.Add("Node.js runtime satisfies the R0 requirement ($nodeText).")
 
-        Invoke-External -Command 'npm' -CommandArgs @('run', 'verify:local') | Out-Null
-        $checks.Add('R0 product syntax checks and tests passed (`npm run verify:local`).')
+        Invoke-External -Command 'node' -CommandArgs @('scripts/verify-product.mjs') | Out-Null
+        $Checks.Add('R0 product syntax checks and tests passed (`node scripts/verify-product.mjs`).')
     }
     finally {
         Pop-Location
     }
-
-    return $checks
 }
 
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
@@ -293,9 +292,7 @@ try {
     }
 
     Assert-CleanTrackedState -Path $verificationRoot
-    foreach ($check in (Invoke-RepositoryChecks -Path $verificationRoot)) {
-        $checks.Add($check)
-    }
+    Invoke-RepositoryChecks -Path $verificationRoot -Checks $checks
 
     Push-Location $verificationRoot
     try {
