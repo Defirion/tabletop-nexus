@@ -1,0 +1,16 @@
+{
+  "name": "tabletop-nexus",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-hosted LAN portal and runtime orchestrator for browser-based tabletop games.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "check": "node --check src/registry.js && node --check src/server.js && node --check public/app.js",
+    "test": "node --test",
+    "verify:local": "node scripts/verify-product.mjs"
+  }
+}

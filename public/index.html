@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Tabletop Nexus</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header>
+        <p class="eyebrow">Local game library</p>
+        <h1>Tabletop Nexus</h1>
+        <p class="lede">One LAN portal for independent browser tabletop games.</p>
+      </header>
+      <section aria-labelledby="library-title">
+        <div class="section-heading">
+          <h2 id="library-title">Games</h2>
+          <span id="library-status" role="status">Loading…</span>
+        </div>
+        <div id="games" class="games" aria-live="polite"></div>
+      </section>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,25 @@
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #f7f4ec;
+  background: #171714;
+  font-synthesis: none;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; background: radial-gradient(circle at top, #323027 0, #171714 42rem); }
+.shell { width: min(70rem, calc(100% - 2rem)); margin: 0 auto; padding: 5rem 0; }
+header { max-width: 44rem; margin-bottom: 3rem; }
+.eyebrow { margin: 0 0 .75rem; text-transform: uppercase; letter-spacing: .14em; font-size: .78rem; color: #c6bb98; }
+h1 { margin: 0; font-size: clamp(2.5rem, 8vw, 5rem); line-height: .95; }
+.lede { color: #d8d2c0; font-size: 1.15rem; line-height: 1.6; }
+.section-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; border-bottom: 1px solid #4a463a; }
+.section-heading h2 { margin: 0 0 1rem; }
+#library-status { color: #b9b29f; }
+.games { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 1rem; padding-top: 1rem; }
+.game-card { padding: 1.25rem; border: 1px solid #4a463a; border-radius: .8rem; background: #22211c; }
+.game-title { margin: 0 0 .6rem; }
+.game-description, .game-meta { color: #cfc8b5; line-height: 1.5; }
+.status-pill { display: inline-block; margin-top: .5rem; padding: .25rem .55rem; border-radius: 999px; background: #39362d; color: #e8dfc2; font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; }
+.empty-state, .error-state { grid-column: 1 / -1; padding: 1rem 0; color: #cfc8b5; }
+.error-state { color: #f0b8ae; }
+@media (max-width: 36rem) { .shell { padding-top: 3rem; } .section-heading { align-items: flex-start; flex-direction: column; } }

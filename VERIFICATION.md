@@ -31,15 +31,20 @@ The verifier must:
 6. Recheck the GitHub target afterward. If it moved, the evidence is `STALE`.
 7. Write a timestamped ignored Markdown report under `.local/pr-verification/` and replace `.local/pr-verification/latest.md` with the newest report.
 
-## Current bootstrap gate
+## Current automated gate
 
-Before application tooling exists, the automated gate validates the workflow scaffold itself:
+The automated gate validates both workflow integrity and the R0 product baseline:
 
 - required Agent-Workflow files are present;
 - `docs/ai/BASELINE` contains the expected source plus a full 40-character commit SHA;
+- Node.js 22 or newer is available;
+- required R0 product files are present;
+- `node scripts/verify-product.mjs` passes, which syntax-checks the server/registry/portal JavaScript and runs the Node test suite;
 - the verification checkout remains free of tracked/staged changes.
 
-When product tooling is introduced, extend the automated checks in `verify.ps1` with the canonical tests/build/typecheck/smoke checks. **Do not change the verifier interface or evidence contract merely because the implementation stack changes.**
+`npm run verify:local` is a developer convenience wrapper around the same shell-free Node product verifier. The canonical PowerShell verifier invokes Node directly so its product gate does not depend on platform-specific npm command shims. R0 intentionally has no package dependencies, so verifier setup does not require `npm install`.
+
+When a later automated check fails, the report retains the earlier checks that completed successfully before that failure. When later milestones introduce dependencies or build tooling, extend the product verifier with the repository's canonical install/build/typecheck/test/smoke commands while preserving this verifier interface and evidence contract.
 
 ## Role boundary
 
@@ -75,12 +80,23 @@ The generated report describes the automated gate unambiguously:
 
 When automated verification passes and human verification is `None`, the report says the automated gate is complete and the PR is ready for independent Review. Human-required checks, when declared, remain a separate gate.
 
+## Stable machine-readable fields
+
+Every generated verification report contains these compatibility fields exactly, with no Markdown styling around either value:
+
+```text
+- Tested SHA: <full 40-character SHA>
+- Automated outcome: PASS|FAIL|STALE
+```
+
+These labels and value formats are stable for Repo-Relay and other tooling. They do not weaken the verification contract: consumers must still require the tested SHA to equal the exact current GitHub target, require fresh evidence, and reject `FAIL`, `STALE`, wrong-SHA, duplicate, or contradictory evidence.
+
 ## Report minimum
 
 Record:
 
 - target (`main` or PR number), full tested SHA, mode, PowerShell version, and timestamp;
-- automated outcome and checks;
+- automated outcome and checks completed before any failure;
 - final tracked/staged worktree state;
 - target-freshness result;
 - `## Human verification required` state/contents;
