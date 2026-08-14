@@ -21,13 +21,15 @@ test("npm and the canonical verifier share the shell-free product check entrypoi
   assert.doesNotMatch(verifier, /Invoke-External -Command 'npm'/);
 });
 
-test("repository checks record successful steps before a later failure", async () => {
+test("repository checks accept an initially empty shared check list and retain successful steps", async () => {
   const verifier = await read("verify.ps1");
 
   assert.match(
     verifier,
-    /function Invoke-RepositoryChecks \{[\s\S]*?\[System\.Collections\.Generic\.List\[string\]\]\$Checks/,
+    /function Invoke-RepositoryChecks \{[\s\S]*?\[AllowEmptyCollection\(\)\]\[System\.Collections\.Generic\.List\[string\]\]\$Checks/,
   );
+  assert.match(verifier, /\$checks = New-Object System\.Collections\.Generic\.List\[string\]/);
+  assert.match(verifier, /Invoke-RepositoryChecks -Path \$verificationRoot -Checks \$checks/);
   assert.match(verifier, /\$Checks\.Add\('Required Agent-Workflow files are present\.'\)/);
   assert.doesNotMatch(verifier, /return \$checks/);
 });
