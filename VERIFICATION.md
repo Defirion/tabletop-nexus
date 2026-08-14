@@ -39,10 +39,12 @@ The automated gate validates both workflow integrity and the R0 product baseline
 - `docs/ai/BASELINE` contains the expected source plus a full 40-character commit SHA;
 - Node.js 22 or newer is available;
 - required R0 product files are present;
-- `npm run verify:local` passes, which syntax-checks the server/registry/portal JavaScript and runs the Node test suite;
+- `node scripts/verify-product.mjs` passes, which syntax-checks the server/registry/portal JavaScript and runs the Node test suite;
 - the verification checkout remains free of tracked/staged changes.
 
-R0 intentionally has no package dependencies, so verifier setup does not require `npm install`. When later milestones introduce dependencies or build tooling, extend `verify.ps1` with the repository's canonical install/build/typecheck/test/smoke commands while preserving this verifier interface and evidence contract.
+`npm run verify:local` is a developer convenience wrapper around the same shell-free Node product verifier. The canonical PowerShell verifier invokes Node directly so its product gate does not depend on platform-specific npm command shims. R0 intentionally has no package dependencies, so verifier setup does not require `npm install`.
+
+When a later automated check fails, the report retains the earlier checks that completed successfully before that failure. When later milestones introduce dependencies or build tooling, extend the product verifier with the repository's canonical install/build/typecheck/test/smoke commands while preserving this verifier interface and evidence contract.
 
 ## Role boundary
 
@@ -83,7 +85,7 @@ When automated verification passes and human verification is `None`, the report 
 Record:
 
 - target (`main` or PR number), full tested SHA, mode, PowerShell version, and timestamp;
-- automated outcome and checks;
+- automated outcome and checks completed before any failure;
 - final tracked/staged worktree state;
 - target-freshness result;
 - `## Human verification required` state/contents;
