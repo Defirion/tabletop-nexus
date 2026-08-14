@@ -2,6 +2,10 @@ import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 
 const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const HEALTH_PATH_BASES = [
+  new URL("http://health-check-a.invalid/"),
+  new URL("http://health-check-b.invalid/"),
+];
 
 function assertRecord(value, label) {
   if (value === null || Array.isArray(value) || typeof value !== "object") {
@@ -18,6 +22,26 @@ function assertPositiveInteger(value, label) {
 function assertNonEmptyString(value, label) {
   if (typeof value !== "string" || value.trim() === "") {
     throw new Error(`${label} must be a non-empty string`);
+  }
+}
+
+function isLocalAbsoluteHttpPath(value) {
+  if (
+    typeof value !== "string" ||
+    !value.startsWith("/") ||
+    value.includes("?") ||
+    value.includes("#")
+  ) {
+    return false;
+  }
+
+  try {
+    return HEALTH_PATH_BASES.every((base) => {
+      const normalized = new URL(value, base);
+      return normalized.origin === base.origin && !normalized.pathname.startsWith("//");
+    });
+  } catch {
+    return false;
   }
 }
 
@@ -57,14 +81,8 @@ export function parseManifest(value) {
   if (!Array.isArray(value.runtime.args) || value.runtime.args.some((arg) => typeof arg !== "string")) {
     throw new Error("manifest.runtime.args must be an array of strings");
   }
-  if (
-    typeof value.runtime.healthPath !== "string" ||
-    !value.runtime.healthPath.startsWith("/") ||
-    value.runtime.healthPath.startsWith("//") ||
-    value.runtime.healthPath.includes("?") ||
-    value.runtime.healthPath.includes("#")
-  ) {
-    throw new Error("manifest.runtime.healthPath must be a local absolute path without query or fragment");
+  if (!isLocalAbsoluteHttpPath(value.runtime.healthPath)) {
+    throw new Error("manifest.runtime.healthPath must be a local absolute path without query, fragment, or authority");
   }
 
   return value;
