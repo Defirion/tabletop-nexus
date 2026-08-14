@@ -43,9 +43,11 @@ R0 does not start game processes or proxy game traffic. A configured game's life
 
 ## Planned runtime components
 
-### Process supervisor (R1)
+### Process supervisor (R1, in progress)
 
-Responsible for allocating private ports, spawning manifest-declared commands directly (never through shell interpolation), supplying `HOST`/`PORT`/`BASE_PATH`, polling health, tracking lifecycle state, and stopping children with graceful and forced phases.
+Private port allocation is implemented as an OS-assisted loopback allocator. Nexus probes `127.0.0.1` with port `0`, closes that probe before returning the lease so the child process can bind the selected port, and keeps the port number logically claimed until the lease is released. This prevents Nexus from assigning one live allocation to multiple games. Because the probe must be closed before a separately launched game can bind, later process-start logic must still handle an external process winning that small probe-to-bind race.
+
+The remaining supervisor responsibilities are spawning manifest-declared commands directly (never through shell interpolation), supplying `HOST`/`PORT`/`BASE_PATH`, polling health, tracking lifecycle state, and stopping children with graceful and forced phases.
 
 ### Reverse proxy (R2)
 

@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 
 const checks = [
   ["--check", "src/registry.js"],
+  ["--check", "src/runtime/private-ports.js"],
   ["--check", "src/server.js"],
   ["--check", "public/app.js"],
   ["--test"],

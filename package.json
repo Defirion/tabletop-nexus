@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node src/server.js",
-    "check": "node --check src/registry.js && node --check src/server.js && node --check public/app.js",
+    "check": "node --check src/registry.js && node --check src/runtime/private-ports.js && node --check src/server.js && node --check public/app.js",
     "test": "node --test",
     "verify:local": "node scripts/verify-product.mjs"
   }
