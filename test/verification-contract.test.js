@@ -33,3 +33,14 @@ test("repository checks accept an initially empty shared check list and retain s
   assert.match(verifier, /\$Checks\.Add\('Required Agent-Workflow files are present\.'\)/);
   assert.doesNotMatch(verifier, /return \$checks/);
 });
+
+test("verification reports emit stable unstyled machine-readable SHA and outcome fields", async () => {
+  const verifier = await read("verify.ps1");
+
+  assert.match(verifier, /\$lines\.Add\("- Tested SHA: \$targetSha"\)/);
+  assert.match(verifier, /\$lines\.Add\("- Automated outcome: \$outcome"\)/);
+  assert.doesNotMatch(verifier, /\$lines\.Add\(\('- SHA: `\{0\}`' -f \$targetSha\)\)/);
+  assert.doesNotMatch(verifier, /\$lines\.Add\("- Automated outcome: \*\*\$outcome\*\*"\)/);
+  assert.doesNotMatch(verifier, /- SHA: `/);
+  assert.doesNotMatch(verifier, /- Automated outcome: \*\*/);
+});

@@ -80,6 +80,17 @@ The generated report describes the automated gate unambiguously:
 
 When automated verification passes and human verification is `None`, the report says the automated gate is complete and the PR is ready for independent Review. Human-required checks, when declared, remain a separate gate.
 
+## Stable machine-readable fields
+
+Every generated verification report contains these compatibility fields exactly, with no Markdown styling around either value:
+
+```text
+- Tested SHA: <full 40-character SHA>
+- Automated outcome: PASS|FAIL|STALE
+```
+
+These labels and value formats are stable for Repo-Relay and other tooling. They do not weaken the verification contract: consumers must still require the tested SHA to equal the exact current GitHub target, require fresh evidence, and reject `FAIL`, `STALE`, wrong-SHA, duplicate, or contradictory evidence.
+
 ## Report minimum
 
 Record:
