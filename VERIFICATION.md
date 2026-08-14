@@ -18,31 +18,36 @@ pwsh -NoProfile -File .\verify.ps1 -Pr 12
 
 Use `-Isolated` when preserving the active checkout matters.
 
+The verifier entrypoint is deliberately two-stage. The caller checkout is only a bootstrap for resolving and materializing the GitHub target. Before repository checks begin, the bootstrap starts a fresh PowerShell process using `verify.ps1` from the selected target checkout/worktree. The target-bound process confirms that its canonical script path and checked-out `HEAD` match the exact selected target SHA, then rechecks that SHA against GitHub before and after the automated gate. This prevents repository-check logic already loaded from another local checkout from becoming authoritative.
+
+The product verifier also requires an explicit execution mode. Canonical verification invokes `node scripts/verify-product.mjs --canonical-target <SHA>`, which confirms the current checkout `HEAD` matches that SHA before running product checks. `npm run verify:local` uses the separate `--local` mode. A no-argument product-verifier invocation is rejected so verifier versions from before target-bound re-execution cannot silently certify a newer target with stale PowerShell rules.
+
 The verifier must:
 
 1. Resolve the target from GitHub:
    - no open PRs -> fetch, fast-forward, and verify `main`;
    - one open PR -> verify it automatically;
    - several open PRs -> prompt for a choice, or use `-Pr` non-interactively.
-2. Bind verification to the exact GitHub target SHA before checks begin. Local branch state is never authoritative.
+2. Bind verification to the exact GitHub target SHA before checks begin. Local branch state is never authoritative: repository checks execute from that target's own `verify.ps1`, and the target checkout `HEAD` must equal the selected SHA.
 3. Refuse modified tracked files or staged changes. Untracked/gitignored files may remain unless they could affect the result. Normal target checkout must refuse rather than overwrite ignored files that collide with the selected target; use `-Isolated` when preserving the active checkout matters.
-4. Support isolated verification with `-Isolated`.
+4. Support isolated verification with `-Isolated`; isolated mode must execute the verifier from the target worktree, not from the caller checkout.
 5. Run the repository's canonical automated checks and confirm they leave no unexpected tracked/staged changes.
 6. Recheck the GitHub target afterward. If it moved, the evidence is `STALE`.
 7. Write a timestamped ignored Markdown report under `.local/pr-verification/` and replace `.local/pr-verification/latest.md` with the newest report.
 
 ## Current automated gate
 
-The automated gate validates both workflow integrity and the R0 product baseline:
+The automated gate validates both workflow integrity and the current product baseline:
 
+- target-bound verifier logic is loaded from the exact tested SHA;
 - required Agent-Workflow files are present;
 - `docs/ai/BASELINE` contains the expected source plus a full 40-character commit SHA;
 - Node.js 22 or newer is available;
-- required R0 product files are present;
-- `node scripts/verify-product.mjs` passes, which syntax-checks the server/registry/portal JavaScript and runs the Node test suite;
+- required product files are present;
+- `node scripts/verify-product.mjs --canonical-target <SHA>` passes, which confirms checkout identity, syntax-checks the server, registry, private-port allocator, and portal JavaScript, and runs the Node test suite;
 - the verification checkout remains free of tracked/staged changes.
 
-`npm run verify:local` is a developer convenience wrapper around the same shell-free Node product verifier. The canonical PowerShell verifier invokes Node directly so its product gate does not depend on platform-specific npm command shims. R0 intentionally has no package dependencies, so verifier setup does not require `npm install`.
+`npm run verify:local` is a developer convenience wrapper that invokes the same shell-free Node product verifier in explicit local mode. The canonical PowerShell verifier invokes Node directly so its product gate does not depend on platform-specific npm command shims. The current product has no package dependencies, so verifier setup does not require `npm install`.
 
 When a later automated check fails, the report retains the earlier checks that completed successfully before that failure. When later milestones introduce dependencies or build tooling, extend the product verifier with the repository's canonical install/build/typecheck/test/smoke commands while preserving this verifier interface and evidence contract.
 
@@ -95,7 +100,7 @@ These labels and value formats are stable for Repo-Relay and other tooling. They
 
 Record:
 
-- target (`main` or PR number), full tested SHA, mode, PowerShell version, and timestamp;
+- target (`main` or PR number), full tested SHA, verifier source SHA, mode, PowerShell version, and timestamp;
 - automated outcome and checks completed before any failure;
 - final tracked/staged worktree state;
 - target-freshness result;

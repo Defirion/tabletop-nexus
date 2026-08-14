@@ -9,11 +9,11 @@ GitHub PR state is the operational source of truth. Checkboxes describe implemen
 - [x] Make TV-less play mandatory for compatible games.
 - [x] Add a runnable portal/API scaffold.
 - [x] Add local configuration discovery and manifest validation.
-- [ ] Merge scaffold after independent verification and review.
+- [x] Merge scaffold after independent verification and review.
 
 ## R1 — Runtime supervisor
 
-- [ ] Allocate private game ports.
+- [x] Allocate private game ports.
 - [ ] Spawn manifest-declared game processes without shell interpolation.
 - [ ] Supply `HOST`, `PORT`, and `BASE_PATH`.
 - [ ] Poll game health and expose lifecycle state.
