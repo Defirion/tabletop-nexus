@@ -15,6 +15,7 @@ GitHub PR state is the operational source of truth. Checkboxes describe implemen
 
 - [x] Allocate private game ports.
 - [ ] Spawn manifest-declared game processes without shell interpolation.
+- [ ] Keep the launch boundary compatible with the remote-play isolation requirement: supported internet-facing deployment must be able to run games under a security identity/sandbox distinct from Nexus rather than relying on a same-OS-identity child as the only separation from trusted player ingress or administration.
 - [ ] Supply `HOST`, `PORT`, and `BASE_PATH` as environment variables and require the child to bind the assigned private host/port.
 - [ ] Before implementing readiness polling, decide the next contract/schema migration and replace configurable `runtime.healthPath` with the fixed private `GET /__nexus/status` readiness surface, updating `GAME-CONTRACT.md`, manifest validation, and tests atomically rather than redefining schema 1 in place.
 - [ ] Poll the fixed Nexus readiness surface and expose lifecycle state.
@@ -24,11 +25,11 @@ GitHub PR state is the operational source of truth. Checkboxes describe implemen
 
 ## R2 — Single-port routing
 
-- [ ] Reverse-proxy HTTP under `/games/<id>/`, stripping the game `BASE_PATH` before forwarding to the private runtime.
+- [ ] Reverse-proxy HTTP under `/games/<id>/`, stripping the game `BASE_PATH` before forwarding to the private runtime except that the reserved private runtime-management namespace `/__nexus` and `/__nexus/*` is never player-proxyable.
 - [ ] Support WebSocket upgrades on the same game runtime/port.
 - [ ] Verify SSE/streaming behavior.
-- [ ] Reject invalid/unregistered game routes.
-- [ ] Add end-to-end routing tests against the fixture game.
+- [ ] Reject invalid/unregistered game routes and any public path whose canonical post-prefix target is `/__nexus` or beneath `/__nexus/`.
+- [ ] Add end-to-end routing tests against the fixture game, including the exact public `/games/<id>/__nexus/status` path, encoded/canonicalization variants that could resolve into the reserved namespace, and unchanged controls for ordinary game routes.
 
 ## Contract revision gate before R3
 
