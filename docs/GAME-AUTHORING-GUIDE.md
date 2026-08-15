@@ -55,7 +55,8 @@ A future Nexus-compatible game should be required to provide this common shape:
 - any game service worker is scoped so it cannot control the Nexus portal or sibling game paths;
 - a fixed private Nexus readiness endpoint at `GET /__nexus/status`;
 - clean shutdown on the Nexus graceful-termination signal, including listener/helper cleanup and full assigned-port release;
-- complete play without a mandatory dedicated display;
+- complete standalone/TV-less play without a mandatory dedicated display; this is the default compatibility baseline;
+- when a game advertises dedicated-display support, a canonical optional shared-board entrypoint is available publicly at `BASE_PATH/board/` from the same runtime/port;
 - server-authoritative shared game state: the server is the board/source of truth and browsers are views/input surfaces;
 - for session-based multiplayer games, a normal landing page that exposes currently joinable game-owned sessions/rooms and provides a way to create a new session;
 - recovery from ordinary browser refresh/transient network interruption without requiring the previous TCP/WebSocket/SSE connection to survive;
@@ -83,6 +84,7 @@ Nexus should not standardize these unless a concrete platform need appears:
 - game-specific actions, intents, events, scoring, turn order, and rules;
 - engine/reducer/state-representation structure;
 - exact host-capability representation;
+- exact shared-board contents, layout, controls, room/session selection or pairing mechanics beyond the canonical `BASE_PATH/board/` entrypoint;
 - frontend framework, build tool, or package manager;
 - persistence technology/model;
 - game-specific payload/rate design, provided it fits inside Nexus/deployment-wide safety ceilings and resource limits.
@@ -96,6 +98,8 @@ The baseline game contract also does **not** promise games a trustworthy public 
 ## Current implemented seam and migration gates
 
 `GAME-CONTRACT.md` and `src/registry.js` still define/enforce the current schema-1 manifest, including configurable `runtime.healthPath`.
+
+Current schema 1 also treats `capabilities.dedicatedDisplay` as descriptive metadata only. It does **not** currently require `BASE_PATH/board/`. The canonical board-entrypoint semantics belong in the future contract/schema promotion with validator and compatibility-test changes rather than silently redefining schema 1.
 
 Do not silently redefine schema 1 underneath already-valid manifests. Before R1 implements Nexus readiness polling, migrate from configurable `runtime.healthPath` to the fixed `/__nexus/status` surface atomically with the contract/schema decision, manifest validation, and tests. Before the first real game adapters, promote the remaining selected behavioral requirements with their compatibility checks. `docs/PLAN.md` records both gates.
 
@@ -223,6 +227,9 @@ runtime receives:  /api/rooms
 browser upgrades:  /games/captain-flip/ws
 runtime receives:  /ws
 
+optional board:    /games/captain-flip/board/
+runtime receives:  /board/
+
 browser requests:  /games/captain-flip/__nexus/status
 Nexus rejects:      reserved private management namespace; never forwarded
 ```
@@ -343,20 +350,39 @@ This is also a poor substitute for game identity: several friends on the same co
 
 If a future game genuinely needs trusted client attribution, define that as an explicit contract extension rather than depending on incidental proxy headers.
 
-## TV-less play is mandatory; dedicated displays remain optional
+## TV-less is the baseline; optional shared-board mode is canonicalized
 
-A compatible game must be fully playable without requiring a dedicated TV/board client.
+A compatible game must be fully playable without requiring a dedicated TV/board client. This standalone or **TV-less mode is the default Nexus compatibility mode**.
 
-A game may still support:
+Nexus treats an extra screen as an optional presentation role rather than a required device type:
 
 ```text
-phones only
-phones + optional shared display
-host/player combined view
-one browser passed around
+standalone / TV-less mode
+    mandatory; phones/shared browser are sufficient for complete play
+
+shared-board / "TV-yes" mode
+    optional enhancement on a TV, tablet, monitor, laptop, or other browser
 ```
 
-If a dedicated display contains required information or controls, the no-TV path must provide equivalent access somewhere else.
+When a game advertises dedicated-display support, it must expose the canonical public entrypoint:
+
+```text
+BASE_PATH/board/
+```
+
+For example:
+
+```text
+https://games.example.com/games/captain-flip/board/
+```
+
+That route is served by the same supervised game runtime and stays under the same Nexus origin/base path. It is not a second runtime, port, or privileged Nexus/admin surface.
+
+For a session-based game, `BASE_PATH/board/` may first show a game-owned room/session chooser or pairing flow and then attach the display to the selected game. Nexus does not need to understand room IDs, pairing codes, board payloads, or whether the board is read-only versus interactive. If the game grants special board controls, the game owns any required authorization; opening the canonical board route does not confer Nexus or game-host authority by itself.
+
+The shared board may make play more convenient or expressive: it can show communal state, animations, turn context, scoring, or other information that is useful on a large screen. But required information or controls must still be available through the standalone path so removing the extra screen never makes the game unplayable.
+
+Games that do not advertise dedicated-display support have no `BASE_PATH/board/` compatibility requirement.
 
 ## Shutdown and process behavior
 
@@ -400,7 +426,7 @@ Pirate Island is already close to the selected production shape:
 - `/healthz` for its own health semantics;
 - `HOST` and `PORT` already supported.
 
-Its main Nexus adaptation remains exact `BASE_PATH`/same-origin URL behavior plus the future fixed private `/__nexus/status` readiness surface. Its HTTP/SSE room model does not need to be rewritten.
+Its main Nexus adaptation remains exact `BASE_PATH`/same-origin URL behavior plus the future fixed private `/__nexus/status` readiness surface. Its HTTP/SSE room model does not need to be rewritten. It does not need to invent a dedicated board view unless it chooses to advertise that optional capability.
 
 ### Captain Flip / Flippin Stories
 
@@ -414,7 +440,9 @@ Captain Flip already provides several of the selected player/session behaviors:
 
 Its development topology currently uses Vite plus a separate authoritative WebSocket process. The Nexus production adaptation should preserve those semantics while serving the built frontend and WebSocket endpoint from one supervised runtime/port.
 
-The normal game root should remain the player entrypoint, including the familiar room-browsing/create/join experience. A future Nexus presentation profile can supply a default display name, while Captain Flip continues to own reconnect tokens and seat identity. The dedicated display should remain useful but optional for complete play.
+The normal game root should remain the player entrypoint, including the familiar room-browsing/create/join experience. A future Nexus presentation profile can supply a default display name, while Captain Flip continues to own reconnect tokens and seat identity.
+
+Captain Flip's existing TV/shared-board experience maps naturally to the future dedicated-display capability. Its canonical Nexus-facing entrypoint should be `BASE_PATH/board/`; the implementation may render the existing TV view there or redirect internally within `BASE_PATH`, while keeping session selection/pairing game-owned. The dedicated display remains useful but optional for complete play.
 
 ## Public URLs and generated links
 
@@ -426,6 +454,7 @@ This matters especially for:
 
 - QR codes;
 - room/share links;
+- shared-board links;
 - redirects;
 - API paths;
 - WebSocket endpoints;
@@ -481,6 +510,8 @@ When planning or adapting a Nexus game, answer these questions in that game's ow
 - What happens when a phone reloads or temporarily loses the network?
 - Can current state be recovered without the previous connection surviving?
 - Can the complete game be played without a dedicated display?
+- If dedicated-display support is advertised, does `BASE_PATH/board/` provide the canonical optional shared-board entrypoint from the same runtime/origin?
+- If the board must attach to a room/session, can that selection or pairing happen entirely inside the game without Nexus understanding the room model?
 - Does `SIGTERM` graceful shutdown release listeners, helpers, and the assigned port on Linux?
 - Are browser storage/cookies scoped sensibly?
 - Does the game need outbound internet access or unusual host capability?
@@ -497,6 +528,7 @@ A reusable Nexus compatibility harness should eventually establish at least:
 - public rejection of `/games/<id>/__nexus/status` and encoded/canonicalization variants that could resolve into the reserved management namespace;
 - unchanged successful routing for ordinary game paths that do not enter the reserved management namespace;
 - initial HTML load at `BASE_PATH/`;
+- when dedicated-display support is advertised, successful public load of `BASE_PATH/board/` with private routing to `/board/` or an equivalent same-`BASE_PATH` internal redirect;
 - correct `BASE_PATH` stripping to private runtime routes;
 - static assets beneath `BASE_PATH` when used;
 - same-origin API traffic beneath `BASE_PATH`;
@@ -513,7 +545,8 @@ Game-specific verification should establish the behavioral requirements Nexus ca
 - Nexus display-name handoff behavior once that optional profile seam is defined;
 - reconnect/current-state recovery;
 - server-authoritative game behavior;
-- complete TV-less play.
+- complete TV-less play;
+- when dedicated-display support is advertised, board/session selection and the useful optional shared-board experience without making it required for complete play.
 
 The reusable harness should verify the integration seam, not game rules.
 
