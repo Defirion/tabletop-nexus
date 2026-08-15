@@ -1,17 +1,17 @@
 # Tabletop Nexus
 
-Tabletop Nexus is a self-hosted LAN portal and runtime orchestrator for browser-based tabletop games.
+Tabletop Nexus is a self-hosted portal and runtime orchestrator for browser-based tabletop games. The current implementation targets LAN play first; the repository also records a planned friends-only remote-play architecture.
 
 The project has one deliberately narrow responsibility:
 
 > **Nexus knows how to run games; Nexus does not know how games work.**
 
-Games remain independent applications and repositories. Tabletop Nexus discovers compatible games through a small manifest contract; later milestones launch, health-check, stop, and proxy those runtimes behind one LAN-facing portal and port.
+Games remain independent applications and repositories. Tabletop Nexus discovers compatible games through a small manifest contract; later milestones launch, readiness-check, stop, and proxy those runtimes behind one browser-facing portal and port.
 
 ## Goals
 
 - One friendly portal for a local library of browser-based tabletop games.
-- One public LAN port regardless of how many games are installed.
+- One browser-facing Nexus port regardless of how many games are installed.
 - A small, versioned integration contract instead of game-specific coupling.
 - Independent game engines, protocols, UI stacks, and repositories.
 - Mandatory **TV-less play** for compatible games.
@@ -21,7 +21,15 @@ Games remain independent applications and repositories. Tabletop Nexus discovers
 
 **R0 platform baseline.** The schema-1 game contract, local library discovery/validation, browser-safe `/api/games` output, and a minimal portal are implemented. Process supervision (R1) and single-port game routing (R2) are deliberately not part of this baseline.
 
-See [`docs/PLAN.md`](docs/PLAN.md) for roadmap status and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for component boundaries.
+See [`docs/PLAN.md`](docs/PLAN.md) for roadmap status and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for current component boundaries.
+
+Planning documents for the intended next-stage architecture are also available:
+
+- [`docs/GAME-AUTHORING-GUIDE.md`](docs/GAME-AUTHORING-GUIDE.md) — selected stricter game-integration direction for the next contract revision;
+- [`docs/DEPLOYMENT-MODEL.md`](docs/DEPLOYMENT-MODEL.md) — ordinary-Linux-host and one-active-game deployment assumptions;
+- [`docs/REMOTE-PLAY.md`](docs/REMOTE-PLAY.md) — proposed friends-only internet exposure, security model, and support gate.
+
+Those planning documents do not claim their future requirements are already implemented; [`GAME-CONTRACT.md`](GAME-CONTRACT.md) remains the current normative compatibility contract.
 
 ## Architecture
 
@@ -34,8 +42,7 @@ Tabletop Nexus :3000
     |-- /api/games            configured game metadata
     |-- /games/<game-id>/...  reverse proxy (planned R2)
     |
-    +-- private game process A (planned R1)
-    +-- private game process B (planned R1)
+    +-- selected private game process (planned R1; one active initially)
 ```
 
 Compatible games use the integration boundary in [`GAME-CONTRACT.md`](GAME-CONTRACT.md).
