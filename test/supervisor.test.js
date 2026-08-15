@@ -38,6 +38,39 @@ async function assertPortBindable(host, port) {
   await new Promise((resolve) => server.close(resolve));
 }
 
+function createRecordingAllocator() {
+  const allocator = new PrivatePortAllocator();
+  const allocations = [];
+  const events = [];
+
+  return {
+    allocations,
+    events,
+    allocator: {
+      async allocate() {
+        const allocationNumber = allocations.length + 1;
+        events.push(`allocate:${allocationNumber}`);
+        const lease = await allocator.allocate();
+        const record = { host: lease.host, port: lease.port, released: false };
+        allocations.push(record);
+
+        return Object.freeze({
+          host: lease.host,
+          port: lease.port,
+          release() {
+            const released = lease.release();
+            if (released) {
+              record.released = true;
+            }
+            events.push(`release:${allocationNumber}:${released}`);
+            return released;
+          },
+        });
+      },
+    },
+  };
+}
+
 test("RuntimeSupervisor supplies canonical launch environment and reaches running only after fixed readiness", async () => {
   const supervisor = new RuntimeSupervisor({
     startupTimeoutMs: 3_000,
@@ -111,7 +144,9 @@ test("RuntimeSupervisor fails closed on invalid readiness and releases startup r
 test("RuntimeSupervisor stops and releases the active game before starting another", async () => {
   const root = await mkdtemp(join(tmpdir(), "nexus-switch-"));
   const firstSignals = join(root, "first-signals.txt");
+  const recording = createRecordingAllocator();
   const supervisor = new RuntimeSupervisor({
+    allocator: recording.allocator,
     startupTimeoutMs: 2_000,
     pollIntervalMs: 20,
     requestTimeoutMs: 100,
@@ -119,16 +154,36 @@ test("RuntimeSupervisor stops and releases the active game before starting anoth
   });
 
   try {
-    await supervisor.start(fixtureGame("game-a", [`--signal-file=${firstSignals}`]));
+    const firstArgs = process.platform === "win32" ? [] : [`--signal-file=${firstSignals}`];
+    await supervisor.start(fixtureGame("game-a", firstArgs));
     const first = supervisor.getActiveRuntime();
     await supervisor.start(fixtureGame("game-b"));
     const second = supervisor.getActiveRuntime();
 
     assert.equal(second.gameId, "game-b");
-    assert.notEqual(second.port, first.port);
     assert.equal(supervisor.getState("game-a").status, "stopped");
-    assert.match(await readFile(firstSignals, "utf8"), /SIGTERM/);
-    await assertPortBindable(first.host, first.port);
+    assert.equal(recording.allocations.length, 2);
+    assert.equal(recording.allocations[0].released, true);
+    assert.ok(
+      recording.events.indexOf("release:1:true") < recording.events.indexOf("allocate:2"),
+      `expected first release before replacement allocation, got ${recording.events.join(", ")}`,
+    );
+
+    if (process.platform !== "win32") {
+      assert.match(await readFile(firstSignals, "utf8"), /SIGTERM/);
+    }
+
+    if (second.port === first.port) {
+      const response = await fetch(`http://${second.host}:${second.port}/fixture`);
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), {
+        host: second.host,
+        port: second.port,
+        basePath: "/games/game-b",
+      });
+    } else {
+      await assertPortBindable(first.host, first.port);
+    }
   } finally {
     await supervisor.stop();
     await rm(root, { recursive: true, force: true });
