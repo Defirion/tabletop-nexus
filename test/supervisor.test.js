@@ -410,9 +410,12 @@ test("RuntimeSupervisor retains a startup-failure lease when cleanup signaling f
   const supervisor = new RuntimeSupervisor({
     allocator: recording.allocator,
     launcher: signalFailure.launcher,
-    startupTimeoutMs: 80,
-    pollIntervalMs: 15,
-    requestTimeoutMs: 30,
+    // This supervisor is reused for the recovery positive control below. Keep the
+    // startup budget comfortably above ordinary Windows process-launch latency,
+    // while the malformed first runtime remains alive long enough to fail cleanup.
+    startupTimeoutMs: 500,
+    pollIntervalMs: 20,
+    requestTimeoutMs: 100,
     stopGracePeriodMs: 50,
   });
 
@@ -420,7 +423,7 @@ test("RuntimeSupervisor retains a startup-failure lease when cleanup signaling f
     await assert.rejects(
       () => supervisor.start(fixtureGame("startup-cleanup-failure", [
         "--status-mode=malformed",
-        "--exit-after-ready-ms=300",
+        "--exit-after-ready-ms=900",
       ])),
       /game readiness timed out/,
     );
