@@ -49,6 +49,7 @@ A future Nexus-compatible game should be required to provide this common shape:
 - `BASE_PATH` uses the canonical no-trailing-slash form `/games/<game-id>`;
 - the normal player landing page is available publicly at `BASE_PATH/`;
 - Nexus strips `BASE_PATH` before forwarding browser game traffic to the private runtime, so private game routes remain rooted at `/`;
+- the runtime-management namespace `/__nexus` and `/__nexus/*` is reserved for the private Nexus-to-game seam and is never exposed through player proxying;
 - production frontend content is served by that same supervised runtime rather than a separate development server;
 - all required browser-facing URLs, APIs, WebSockets/SSE, redirects, and generated links work on the public Nexus origin beneath `BASE_PATH` rather than constructing direct LAN/private-port URLs;
 - any game service worker is scoped so it cannot control the Nexus portal or sibling game paths;
@@ -145,6 +146,8 @@ Serving frontend content from the runtime does not make private server state pub
 
 Credentials, private configuration, authoritative state, and any information the game intentionally keeps server-only must stay outside the browser-facing content surface. Stronger hidden-information/anti-cheat rules remain game-owned because Nexus is primarily intended for small trusted groups rather than competitive hosting.
 
+For supported remote play, the process-isolation boundary is separate from the one-runtime topology: the game execution context must be isolated from Nexus control-plane access as required by `docs/DEPLOYMENT-MODEL.md` and `docs/REMOTE-PLAY.md`. One supervised process does not imply that it should share Nexus's OS security identity.
+
 ## Nexus readiness status versus game health
 
 Nexus readiness and game-owned diagnostics are deliberately separate concepts.
@@ -168,7 +171,9 @@ with at least:
 
 > **Nexus may route players to this runtime.**
 
-The endpoint is private to the Nexus-to-game runtime seam. It is queried directly on the Nexus-assigned private host/port and should not be exposed as a public player route under `BASE_PATH`.
+The endpoint is private to the Nexus-to-game runtime seam. It is queried directly on the Nexus-assigned private host/port and is not exposed as a public player route under `BASE_PATH`.
+
+`/__nexus` is a reserved private runtime-management namespace. Nexus player routing must reject a request whose canonical post-`BASE_PATH` target is exactly `/__nexus` or begins `/__nexus/`, including encoded or otherwise ambiguous path forms that could canonicalize into that namespace. Games must not place player APIs/assets under the reserved namespace.
 
 For the initial status schema:
 
@@ -209,7 +214,7 @@ receives:
 BASE_PATH=/games/captain-flip
 ```
 
-Nexus owns the public mount prefix and strips it before proxying the request to the private runtime. For example:
+Nexus owns the public mount prefix and strips it before proxying an ordinary player request to the private runtime. For example:
 
 ```text
 browser requests:  /games/captain-flip/api/rooms
@@ -217,9 +222,14 @@ runtime receives:  /api/rooms
 
 browser upgrades:  /games/captain-flip/ws
 runtime receives:  /ws
+
+browser requests:  /games/captain-flip/__nexus/status
+Nexus rejects:      reserved private management namespace; never forwarded
 ```
 
-The game therefore keeps ordinary private routes rooted at `/`, while using `BASE_PATH` when producing browser-facing URLs and build configuration.
+The reserved-management rejection is applied after the public path has been canonicalized/validated, so equivalent encoded or traversal-like forms cannot bypass it.
+
+The game therefore keeps ordinary private routes rooted at `/`, while using `BASE_PATH` when producing browser-facing URLs and build configuration. The `/__nexus` namespace is the exception: it is reserved to Nexus management and is not available for public game routes.
 
 Browser navigation, HTML/CSS/JS/assets, APIs, WebSockets, SSE/EventSource connections, redirects, generated links, cookies where used, and service-worker scope where used must remain compatible with that public mount.
 
@@ -234,7 +244,8 @@ Browser
    v
 Nexus public route: /games/<id>/...
    |
-   | strip /games/<id>, then proxy privately
+   | validate/canonicalize; deny reserved /__nexus namespace;
+   | otherwise strip /games/<id> and proxy privately
    v
 Nexus-assigned game HOST:PORT
 ```
@@ -424,11 +435,14 @@ This matters especially for:
 
 A game should not require access to:
 
-- Nexus admin APIs;
+- Nexus admin APIs/listener;
+- Nexus trusted player-ingress socket;
 - Cloudflare credentials;
 - Tailscale credentials/configuration;
 - another game's state directory;
 - another game's private port.
+
+For supported remote play, the deployment must enforce the first two items from the game-runtime execution context even if public traffic exploits a game/runtime dependency. A game launched under Nexus's same OS identity is not by itself a sufficient isolation boundary when local socket/filesystem identity is being trusted.
 
 The baseline compatibility rule is intentionally modest: the production web server must expose only intended public browser artifacts/content. Game-specific secrecy/redaction policy stays inside the game.
 
@@ -454,6 +468,7 @@ When planning or adapting a Nexus game, answer these questions in that game's ow
 - Does it bind exactly to the supplied `HOST`/`PORT` rather than a wildcard interface?
 - Does it treat `BASE_PATH` as `/games/<id>` without a trailing slash and generate the public landing path as `BASE_PATH/`?
 - Are private runtime routes correct after Nexus strips `BASE_PATH` before proxying?
+- Does the game keep player routes out of the reserved `/__nexus` runtime-management namespace?
 - Does `GET /__nexus/status` report Nexus readiness with the agreed status-schema and failure semantics?
 - If the runtime serves files from disk, is exposure restricted to an explicit public build/static root rather than repository/server files?
 - Does all required browser traffic return to the Nexus origin beneath `BASE_PATH`?
@@ -479,6 +494,8 @@ A reusable Nexus compatibility harness should eventually establish at least:
 - startup with non-default `HOST`, `PORT`, and `BASE_PATH` environment values;
 - binding to the assigned private `HOST`/`PORT` rather than widening exposure;
 - fixed private `/__nexus/status` readiness behavior, including valid `ready=false` and invalid/unavailable status handling;
+- public rejection of `/games/<id>/__nexus/status` and encoded/canonicalization variants that could resolve into the reserved management namespace;
+- unchanged successful routing for ordinary game paths that do not enter the reserved management namespace;
 - initial HTML load at `BASE_PATH/`;
 - correct `BASE_PATH` stripping to private runtime routes;
 - static assets beneath `BASE_PATH` when used;
