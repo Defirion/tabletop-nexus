@@ -12,13 +12,13 @@ browser(s)
 | Tabletop Nexus public server  |
 | portal / registry / proxy     |
 +-------------------------------+
-       |              |
-       v              v
- private port A   private port B
- game process A  game process B
+               |
+               v
+        private game port
+        selected game process
 ```
 
-Nexus owns the browser-facing port. Games remain independent repositories/processes and, once R1/R2 land, bind to Nexus-selected private ports and are exposed under `/games/<game-id>/`.
+Nexus owns the browser-facing port. Games remain independent repositories/processes and, once R1/R2 land, bind to Nexus-selected private ports and are exposed under `/games/<game-id>/`. The initial deployment policy keeps only one game runtime active at a time; multiple simultaneous runtimes remain a future capability.
 
 ## R0 components
 
