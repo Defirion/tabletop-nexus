@@ -18,7 +18,7 @@ browser(s)
  game process A  game process B
 ```
 
-Nexus owns the LAN-facing port. Games remain independent repositories/processes and, once R1/R2 land, bind to Nexus-selected private ports and are exposed under `/games/<game-id>/`.
+Nexus owns the browser-facing port. Games remain independent repositories/processes and, once R1/R2 land, bind to Nexus-selected private ports and are exposed under `/games/<game-id>/`.
 
 ## R0 components
 
@@ -47,7 +47,9 @@ R0 does not start game processes or proxy game traffic. A configured game's life
 
 Private port allocation is implemented as an OS-assisted loopback allocator. Nexus probes `127.0.0.1` with port `0`, closes that probe before returning the lease so the child process can bind the selected port, and keeps the port number logically claimed until the lease is released. This prevents Nexus from assigning one live allocation to multiple games. Because the probe must be closed before a separately launched game can bind, later process-start logic must still handle an external process winning that small probe-to-bind race.
 
-The remaining supervisor responsibilities are spawning manifest-declared commands directly (never through shell interpolation), supplying `HOST`/`PORT`/`BASE_PATH`, polling health, tracking lifecycle state, and stopping children with graceful and forced phases.
+The remaining supervisor responsibilities are spawning manifest-declared commands directly (never through shell interpolation), supplying `HOST`/`PORT`/`BASE_PATH`, polling Nexus readiness, tracking lifecycle state, enforcing the initial one-active-game policy, and stopping children with graceful and forced phases.
+
+The current schema-1 contract still uses configurable `runtime.healthPath`. Before R1 readiness polling is implemented, the plan requires an atomic contract/schema, validator, and test migration to the fixed private `/__nexus/status` readiness surface rather than implementing the old seam and replacing it shortly afterward.
 
 ### Reverse proxy (R2)
 
@@ -55,14 +57,15 @@ Routes HTTP and upgrade/WebSocket traffic from `/games/<id>/...` to the correct 
 
 ## Security model
 
-The first target is a trusted home LAN, not hostile multi-tenant hosting. Even so:
+The current implementation target is a trusted home LAN, not hostile multi-tenant hosting. Even so:
 
 - configuration and runtime commands are server-side only;
 - public static paths are allowlisted rather than mapped directly to arbitrary filesystem paths;
 - manifests are local trusted configuration, not remotely supplied launch instructions;
 - future process spawning must use executable + argument arrays without shell interpolation;
-- invalid or unregistered public game routes must be rejected;
-- remote/internet exposure is out of scope until authentication and a stronger threat model exist.
+- invalid or unregistered public game routes must be rejected.
+
+Friends-only internet exposure is planned separately in [`REMOTE-PLAY.md`](REMOTE-PLAY.md). That design deliberately keeps players unauthenticated initially, adds a stronger public-ingress threat model and private admin boundary, and is not considered supported until its documented acceptance gate passes.
 
 ## Design rule
 
