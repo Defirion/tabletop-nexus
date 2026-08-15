@@ -15,6 +15,7 @@ The initial remote-play operating model assumes:
 - Tailscale and `cloudflared` may be long-lived alongside it;
 - Nexus launches and supervises game processes;
 - game processes bind to Nexus-selected private ports;
+- supported remote play runs game code under a security identity/sandbox that is distinct from Nexus and cannot reach Nexus control-plane listeners merely because it is local to the VM;
 - **one game runtime is active at a time** for the initial supported deployment profile;
 - the host/VM has enough headroom for the operating system, ingress/control services, Nexus, and that one game.
 
@@ -85,6 +86,8 @@ ordinary filesystem permissions
 outbound internet connectivity where remote ingress/control requires it
 sufficient CPU/RAM for Nexus + one game
 ```
+
+Supported remote play additionally requires the host to be able to launch/supervise the game under a distinct security identity or equivalent sandbox and to enforce host-local access controls that keep the game away from Nexus player-ingress and admin control surfaces.
 
 Remote play may additionally use Tailscale and Cloudflare Tunnel, but Nexus games should not know which cloud/provider supplies the VM.
 
@@ -193,6 +196,22 @@ one-active-game policy
 
 None of these initially requires containers.
 
+## Local control-plane isolation for supported remote play
+
+A game runtime is intentionally reachable from hostile public player traffic, so an ordinary dependency exploit in that runtime must not implicitly grant Nexus process-control authority merely because both processes share one VM.
+
+For supported remote play:
+
+- the active game must execute under an OS security identity or equivalent sandbox distinct from Nexus and `cloudflared`;
+- the launch/supervision mechanism must apply that boundary even though Nexus initiates lifecycle actions;
+- game code must be unable to open the trusted Nexus player Unix socket;
+- game code must be unable to connect to the Nexus admin listener/control plane from the local host;
+- the boundary must still permit the assigned private game listener, Nexus-to-game traffic, and any explicitly allowed ordinary public-internet egress.
+
+A direct child that retains Nexus's effective OS identity is therefore **not sufficient for supported remote play** when filesystem/socket permissions or local-process identity are being used as security controls. An implementation may use a service manager, a dedicated launcher, systemd sandboxing, a container, or another provider-independent mechanism, but the required property is isolation of the game execution context rather than any one product.
+
+Browser-only admin defenses such as CSRF, Host validation, and frame denial remain necessary for browser threats, but they do not replace this local-process boundary.
+
 ## Lifecycle expectation when switching games
 
 The normal sequence is:
@@ -258,6 +277,7 @@ Before advertising a concrete VM profile as supported:
 - [ ] Game-process resource limits do not break legitimate play.
 - [ ] Starting/stopping/switching releases expected resources.
 - [ ] Private game ports remain private.
+- [ ] From the game-runtime execution context, attempts to open trusted player ingress or connect to Nexus administration fail, while the assigned game listener and explicitly allowed egress still work.
 - [ ] Remote-play security acceptance criteria applicable to that deployment pass.
 - [ ] Provider-specific bandwidth/storage limits are documented separately.
 
