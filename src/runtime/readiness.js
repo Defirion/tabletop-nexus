@@ -29,86 +29,111 @@ export function queryNexusStatus({
 
   return new Promise((resolve) => {
     let settled = false;
+    let req;
+    let timeoutId;
     const settle = (value) => {
-      if (!settled) {
-        settled = true;
-        resolve(value);
+      if (settled) {
+        return false;
+      }
+      settled = true;
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId);
+      }
+      resolve(value);
+      return true;
+    };
+    const abort = (reason, message) => {
+      if (settle(invalid(reason)) && req !== undefined) {
+        req.destroy(new Error(message));
       }
     };
 
-    const req = request(
-      {
-        host,
-        port,
-        method: "GET",
-        path: NEXUS_STATUS_PATH,
-        headers: { accept: "application/json" },
-      },
-      (response) => {
-        if (response.statusCode !== 200) {
-          response.resume();
-          settle(invalid(`status-${response.statusCode ?? "unknown"}`));
-          return;
-        }
-
-        const contentType = String(response.headers["content-type"] ?? "")
-          .split(";", 1)[0]
-          .trim()
-          .toLowerCase();
-        if (contentType !== "application/json") {
-          response.resume();
-          settle(invalid("content-type"));
-          return;
-        }
-
-        const chunks = [];
-        let bytes = 0;
-        response.on("data", (chunk) => {
-          bytes += chunk.length;
-          if (bytes > MAX_STATUS_BYTES) {
-            req.destroy(new Error("Nexus status response exceeded size limit"));
-            return;
-          }
-          chunks.push(chunk);
-        });
-        response.once("end", () => {
-          if (bytes > MAX_STATUS_BYTES) {
-            settle(invalid("body-too-large"));
-            return;
-          }
-
-          let payload;
-          try {
-            payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-          } catch {
-            settle(invalid("invalid-json"));
-            return;
-          }
-
-          if (payload === null || Array.isArray(payload) || typeof payload !== "object") {
-            settle(invalid("invalid-payload"));
-            return;
-          }
-          if (payload.schema !== NEXUS_STATUS_SCHEMA) {
-            settle(invalid("unsupported-schema"));
-            return;
-          }
-          if (typeof payload.ready !== "boolean") {
-            settle(invalid("invalid-ready"));
-            return;
-          }
-
-          settle(Object.freeze({
-            ready: payload.ready,
-            valid: true,
-            reason: payload.ready ? "ready" : "not-ready",
-          }));
-        });
-      },
+    // This is an absolute wall-clock probe deadline, not a socket inactivity
+    // timeout. Response activity therefore cannot extend the request forever.
+    timeoutId = setTimeout(
+      () => abort("request-timeout", "Nexus status request exceeded its absolute deadline"),
+      requestTimeoutMs,
     );
 
+    try {
+      req = request(
+        {
+          host,
+          port,
+          method: "GET",
+          path: NEXUS_STATUS_PATH,
+          headers: { accept: "application/json" },
+        },
+        (response) => {
+          if (response.statusCode !== 200) {
+            response.resume();
+            settle(invalid(`status-${response.statusCode ?? "unknown"}`));
+            return;
+          }
+
+          const contentType = String(response.headers["content-type"] ?? "")
+            .split(";", 1)[0]
+            .trim()
+            .toLowerCase();
+          if (contentType !== "application/json") {
+            response.resume();
+            settle(invalid("content-type"));
+            return;
+          }
+
+          const chunks = [];
+          let bytes = 0;
+          response.on("data", (chunk) => {
+            if (settled) {
+              return;
+            }
+            bytes += chunk.length;
+            if (bytes > MAX_STATUS_BYTES) {
+              abort("body-too-large", "Nexus status response exceeded size limit");
+              return;
+            }
+            chunks.push(chunk);
+          });
+          response.once("end", () => {
+            if (settled) {
+              return;
+            }
+
+            let payload;
+            try {
+              payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+            } catch {
+              settle(invalid("invalid-json"));
+              return;
+            }
+
+            if (payload === null || Array.isArray(payload) || typeof payload !== "object") {
+              settle(invalid("invalid-payload"));
+              return;
+            }
+            if (payload.schema !== NEXUS_STATUS_SCHEMA) {
+              settle(invalid("unsupported-schema"));
+              return;
+            }
+            if (typeof payload.ready !== "boolean") {
+              settle(invalid("invalid-ready"));
+              return;
+            }
+
+            settle(Object.freeze({
+              ready: payload.ready,
+              valid: true,
+              reason: payload.ready ? "ready" : "not-ready",
+            }));
+          });
+        },
+      );
+    } catch {
+      settle(invalid("request-error"));
+      return;
+    }
+
     req.once("error", () => settle(invalid("request-error")));
-    req.setTimeout(requestTimeoutMs, () => req.destroy(new Error("Nexus status request timed out")));
     req.end();
   });
 }
@@ -152,6 +177,9 @@ export async function waitForNexusReadiness({
       throw error;
     }
 
+    // queryNexusStatus treats this as an absolute wall-clock request deadline.
+    // Capping it to the remaining startup budget means an in-flight probe cannot
+    // outlive the supervisor's configured startup deadline, even if bytes trickle.
     const outcome = await Promise.race([
       query({
         host,
