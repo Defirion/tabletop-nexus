@@ -69,8 +69,7 @@ These are useful patterns but should not be core compatibility requirements yet:
 - browser storage/cookie namespacing beyond what same-origin/base-path safety requires;
 - game-specific hidden-information/redaction design beyond keeping server-only data out of the public static root;
 - designing for modest resource use while concrete supported deployment profiles and their limits are established from measurement;
-- particular reconnect-token, backoff, snapshot, caching, or persistence strategies;
-- using mature framework/runtime static-file serving rather than custom file-serving code.
+- particular reconnect-token, backoff, snapshot, caching, or persistence strategies.
 
 ### GAME-OWNED
 
@@ -236,8 +235,6 @@ The game should not need to know Nexus's LAN/public hostname, Cloudflare setup, 
 
 Development URLs such as `localhost:5173` are fine for development. They are not part of the Nexus production runtime contract.
 
-If a game publishes deep links, those links should remain usable after ordinary navigation or refresh. An SPA catch-all that serves `index.html` is one possible implementation, not a required architecture for every game.
-
 ## Player presentation identity versus game-session identity
 
 Nexus may maintain a small browser-local player profile so a friend does not have to type the same display name separately in every game.
@@ -304,8 +301,6 @@ This gives Nexus-compatible games a common operational model:
 
 Nexus still does not understand the board, rules, actions, or payloads.
 
-If game rules depend on time, the authoritative server should also own the authoritative timer/deadline. The browser may render a local countdown, but changing or drifting a device clock must not change canonical game state.
-
 ## Standardize behavior, not transport choice
 
 Valid games may use:
@@ -317,9 +312,7 @@ Valid games may use:
 
 Nexus routes/proxies these transports but does not interpret game messages.
 
-A contract can require same-origin/base-path safety and reconnectable behavior without requiring every game to use the same network protocol or heartbeat packet format.
-
-Games must not hard-code WebSocket `Origin` assumptions around their private `HOST:PORT` or a development hostname. Nexus validates browser WebSocket origins at the public proxy for supported remote play; game-specific origin policy, if any, must remain compatible with the public Nexus origin.
+A contract can require same-origin/base-path safety and reconnectable behavior without requiring every game to use the same network protocol.
 
 ## Client attribution belongs to Nexus unless explicitly contracted
 
@@ -344,7 +337,7 @@ host/player combined view
 one browser passed around
 ```
 
-If a dedicated display contains required information or controls, the no-TV path must provide equivalent access somewhere else. A TV may improve presentation; it cannot be the only place required game state or legal controls exist.
+If a dedicated display contains required information or controls, the no-TV path must provide equivalent access somewhere else.
 
 ## Shutdown and process behavior
 
@@ -361,8 +354,6 @@ When Nexus requests normal termination, the game must cleanly shut down, includi
 - leave no background runtime that prevents the next game from starting cleanly.
 
 Nexus should still have a forced-termination fallback after a timeout. The fallback protects the platform from a hung game; it is not the normal compatibility path.
-
-If the runtime enters a genuinely unrecoverable internal state, exiting with a non-zero status is preferable to remaining alive and unusable indefinitely. The exact restart/crash-loop policy belongs to Nexus supervision.
 
 ## Browser state and shared-origin hygiene
 
@@ -441,7 +432,7 @@ The initial deployment profile plans around Nexus plus **one active game runtime
 
 Supported remote deployment will impose per-game/process CPU, memory, task/process, and file-descriptor limits, plus Nexus-wide HTTP/WebSocket/connection/rate safety ceilings. Those controls are architecturally decided; their concrete numeric values are calibrated from measurements and supported deployment profiles rather than invented in the game contract.
 
-Game authors should therefore avoid unbounded caches, session buffers, background workers, or other designs that cannot operate predictably inside measured limits. Do not encode one universal CPU/RAM number in game compatibility until a supported profile has actually established it.
+Game authors should therefore avoid unbounded resource use and design games to operate predictably inside measured limits. Do not encode one universal CPU/RAM number in game compatibility until a supported profile has actually established it.
 
 See `docs/DEPLOYMENT-MODEL.md` for resource qualification and `docs/REMOTE-PLAY.md` for proxy/security limits.
 
@@ -471,7 +462,6 @@ When planning or adapting a Nexus game, answer these questions in that game's ow
 - Are browser storage/cookies scoped sensibly?
 - Does the game need outbound internet access or unusual host capability?
 - Can the runtime operate within the measured resource/proxy ceilings of supported deployment profiles?
-- Does the supervised runtime emit useful non-sensitive operational errors/logs to stdout/stderr?
 - Which checks belong in the reusable Nexus seam tests versus the game's own verifier?
 
 ## Compatibility tests worth planning early
