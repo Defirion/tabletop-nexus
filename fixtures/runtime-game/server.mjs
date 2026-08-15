@@ -1,12 +1,14 @@
+import { once } from "node:events";
 import { appendFile } from "node:fs/promises";
 import { createServer } from "node:http";
 
 const host = process.env.HOST;
 const port = Number(process.env.PORT);
 const basePath = process.env.BASE_PATH;
+const launchToken = process.env.NEXUS_LAUNCH_TOKEN;
 
-if (!host || !Number.isInteger(port) || port < 1 || !basePath) {
-  throw new Error("fixture requires HOST, PORT, and BASE_PATH");
+if (!host || !Number.isInteger(port) || port < 1 || !basePath || !launchToken) {
+  throw new Error("fixture requires HOST, PORT, BASE_PATH, and NEXUS_LAUNCH_TOKEN");
 }
 
 const options = new Map(
@@ -16,6 +18,8 @@ const options = new Map(
   }),
 );
 const readyDelayMs = Number(options.get("--ready-delay-ms") ?? "0");
+const bindDelayMs = Number(options.get("--bind-delay-ms") ?? "0");
+const outputBytes = Number(options.get("--output-bytes") ?? "0");
 const statusMode = String(options.get("--status-mode") ?? "normal");
 const signalFile = options.get("--signal-file");
 const ignoreSigterm = options.has("--ignore-sigterm");
@@ -33,7 +37,7 @@ const server = createServer((request, response) => {
     }
     if (statusMode === "wrong-content-type") {
       response.writeHead(200, { "content-type": "text/plain" });
-      response.end(JSON.stringify({ schema: 1, ready: true }));
+      response.end(JSON.stringify({ schema: 2, ready: true, launchToken }));
       return;
     }
     if (statusMode === "trickle") {
@@ -53,7 +57,11 @@ const server = createServer((request, response) => {
       return;
     }
     response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ schema: 1, ready: Date.now() >= readyAt }));
+    response.end(JSON.stringify({
+      schema: 2,
+      ready: Date.now() >= readyAt,
+      launchToken,
+    }));
     return;
   }
 
@@ -80,6 +88,29 @@ process.on("SIGTERM", async () => {
   }
   server.close(() => process.exit(0));
 });
+
+async function writeOutput(stream, totalBytes) {
+  let remaining = totalBytes;
+  const chunk = Buffer.alloc(16 * 1024, "x");
+  while (remaining > 0) {
+    const current = remaining >= chunk.length
+      ? chunk
+      : chunk.subarray(0, remaining);
+    remaining -= current.length;
+    if (!stream.write(current)) {
+      await once(stream, "drain");
+    }
+  }
+}
+
+if (outputBytes > 0) {
+  await writeOutput(process.stdout, outputBytes);
+  await writeOutput(process.stderr, outputBytes);
+}
+
+if (bindDelayMs > 0) {
+  await new Promise((resolve) => setTimeout(resolve, bindDelayMs));
+}
 
 await new Promise((resolve, reject) => {
   server.once("error", reject);
