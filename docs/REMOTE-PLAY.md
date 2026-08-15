@@ -230,6 +230,8 @@ Expose only intended player functionality, conceptually:
 /games/<registered-id>/* reverse proxy to running game
 ```
 
+The safe public game API may continue to describe configured/registered games, but the public surface must not expose start/stop/process controls. Player UI must clearly distinguish unavailable games from player-routable ones, and a game route becomes enterable only after Nexus readiness says the runtime may receive players.
+
 Never expose through the public route:
 
 ```text
@@ -498,8 +500,8 @@ This remains intentionally **undecided** until that discussion occurs.
 
 1. Finish process supervision.
 2. Supply `HOST`, `PORT`, `BASE_PATH`.
-3. Add health/lifecycle state.
-4. Add graceful/forced shutdown.
+3. Migrate configurable `runtime.healthPath` to the fixed private `/__nexus/status` readiness contract atomically with contract/schema, validator, and tests; then add Nexus readiness/lifecycle polling.
+4. Add graceful/forced shutdown and enforce the initial one-active-game policy.
 5. Complete lifecycle tests.
 
 ### Phase B — R2 and proxy hardening
