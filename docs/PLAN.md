@@ -15,15 +15,15 @@ GitHub PR state is the operational source of truth. Checkboxes describe implemen
 
 - [x] Allocate private game ports.
 - [ ] Spawn manifest-declared game processes without shell interpolation.
-- [ ] Supply `HOST`, `PORT`, and `BASE_PATH`.
+- [ ] Supply `HOST`, `PORT`, and `BASE_PATH` as environment variables and require the child to bind the assigned private host/port.
 - [ ] Poll game readiness and expose lifecycle state.
-- [ ] Implement graceful stop plus forced-shutdown fallback.
+- [ ] Implement graceful `SIGTERM` stop on Linux plus forced-shutdown fallback.
 - [ ] Add lifecycle tests using a tiny original fixture game.
 
 ## R2 — Single-port routing
 
-- [ ] Reverse-proxy HTTP under `/games/<id>/`.
-- [ ] Support WebSocket upgrades.
+- [ ] Reverse-proxy HTTP under `/games/<id>/`, stripping the game `BASE_PATH` before forwarding to the private runtime.
+- [ ] Support WebSocket upgrades on the same game runtime/port.
 - [ ] Verify SSE/streaming behavior.
 - [ ] Reject invalid/unregistered game routes.
 - [ ] Add end-to-end routing tests against the fixture game.
@@ -34,7 +34,8 @@ Before adapting the real games, promote the deliberately selected stricter commo
 
 - [ ] Decide the schema/version migration for the stricter contract; do not silently redefine already-valid schema-1 manifests.
 - [ ] Replace configurable `runtime.healthPath` with the fixed private `GET /__nexus/status` readiness surface, and update manifest validation/tests atomically.
-- [ ] Promote the selected runtime/browser/session requirements recorded in `docs/GAME-AUTHORING-GUIDE.md`, including same-origin `BASE_PATH` behavior, clean shutdown, server-authoritative shared state, and session/recovery expectations where applicable.
+- [ ] Promote the selected runtime/browser/session requirements recorded in `docs/GAME-AUTHORING-GUIDE.md`, including exact private `HOST` binding, canonical `BASE_PATH=/games/<id>` semantics, same-origin browser behavior, service-worker containment, clean shutdown, server-authoritative shared state, and session/recovery expectations where applicable.
+- [ ] Define the minimal optional Nexus player-presentation handoff: a reusable display name remains distinct from any opaque Nexus browser/profile ID, and neither replaces game-owned room/seat/reconnect identity or authorization.
 - [ ] Add reusable compatibility checks for the promoted integration requirements without teaching Nexus game rules or game-specific payloads.
 
 ## R3 — First real adapters
@@ -49,6 +50,7 @@ Before adapting the real games, promote the deliberately selected stricter commo
 
 - [ ] Start/stop controls and visible lifecycle state.
 - [ ] Friendly startup failures and logs.
+- [ ] Add the reusable Nexus player-presentation profile UX once its pre-R3 handoff is defined.
 - [ ] Game metadata/artwork hooks using only distributable assets.
 - [ ] Recover cleanly after Nexus restarts.
 - [ ] Mobile-friendly portal.
