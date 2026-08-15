@@ -35,6 +35,21 @@ function collectChild(child) {
   });
 }
 
+function fakeChild(options = {}) {
+  const pid = Object.hasOwn(options, "pid") ? options.pid : 1234;
+  const kill = options.kill ?? (() => true);
+  return Object.assign(new EventEmitter(), {
+    pid,
+    exitCode: null,
+    signalCode: null,
+    kill,
+  });
+}
+
+function nextTurn() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 test("launchLocalGameProcess keeps executable, arguments, environment, and shell boundary separate", () => {
   const calls = [];
   const child = Object.assign(new EventEmitter(), { pid: 1234, exitCode: null, signalCode: null });
@@ -172,4 +187,104 @@ test("launchGameProcess rejects an undeclared launcher boundary before launch", 
     /securityBoundary must declare a supported game launch boundary/,
   );
   assert.equal(launched, false);
+});
+
+test("local launcher does not treat a post-launch child error as definitive process exit", async () => {
+  const child = fakeChild();
+  const launcher = createLocalGameProcessLauncher({
+    parentEnv: {},
+    spawn: () => child,
+  });
+  const handle = launchGameProcess(installedGame("/games/example", "node", ["server.js"]), { launcher });
+
+  let settled = false;
+  const exit = launcher.waitForExit(handle).then((result) => {
+    settled = true;
+    return result;
+  });
+
+  child.emit("error", new Error("synthetic kill failure"));
+  await nextTurn();
+  assert.equal(settled, false);
+
+  child.exitCode = 0;
+  child.emit("close", 0, null);
+  assert.deepEqual(await exit, { code: 0, signal: null, error: null });
+});
+
+test("local launcher preserves spawn failure detail but waits for close before reporting termination", async () => {
+  const child = fakeChild({ pid: undefined });
+  const launcher = createLocalGameProcessLauncher({
+    parentEnv: {},
+    spawn: () => child,
+  });
+  const handle = launchGameProcess(installedGame("/games/example", "missing-game", []), { launcher });
+  const spawnError = Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" });
+
+  let settled = false;
+  const exit = launcher.waitForExit(handle).then((result) => {
+    settled = true;
+    return result;
+  });
+  child.emit("error", spawnError);
+  await nextTurn();
+  assert.equal(settled, false);
+
+  child.emit("close", -2, null);
+  assert.deepEqual(await exit, { code: -2, signal: null, error: spawnError });
+});
+
+test("local launcher fails promptly when graceful signal delivery is rejected and keeps exit unconfirmed", async () => {
+  const child = fakeChild();
+  child.kill = (signal) => {
+    queueMicrotask(() => child.emit("error", new Error(`synthetic ${signal} failure`)));
+    return false;
+  };
+  const launcher = createLocalGameProcessLauncher({ parentEnv: {}, spawn: () => child });
+  const handle = launchGameProcess(installedGame("/games/example", "node", ["server.js"]), { launcher });
+
+  let exitSettled = false;
+  const exit = launcher.waitForExit(handle).then((result) => {
+    exitSettled = true;
+    return result;
+  });
+  await assert.rejects(
+    () => launcher.stop(handle, { gracePeriodMs: 10 }),
+    (error) => error?.code === "GAME_SIGNAL_DELIVERY_FAILED" && error?.signal === "SIGTERM",
+  );
+  await nextTurn();
+  assert.equal(exitSettled, false);
+
+  child.exitCode = 0;
+  child.emit("close", 0, null);
+  await exit;
+});
+
+test("local launcher fails promptly when forced signal delivery is rejected and keeps exit unconfirmed", async () => {
+  const child = fakeChild();
+  child.kill = (signal) => {
+    if (signal === "SIGTERM") {
+      return true;
+    }
+    queueMicrotask(() => child.emit("error", new Error(`synthetic ${signal} failure`)));
+    return false;
+  };
+  const launcher = createLocalGameProcessLauncher({ parentEnv: {}, spawn: () => child });
+  const handle = launchGameProcess(installedGame("/games/example", "node", ["server.js"]), { launcher });
+
+  let exitSettled = false;
+  const exit = launcher.waitForExit(handle).then((result) => {
+    exitSettled = true;
+    return result;
+  });
+  await assert.rejects(
+    () => launcher.stop(handle, { gracePeriodMs: 5 }),
+    (error) => error?.code === "GAME_SIGNAL_DELIVERY_FAILED" && error?.signal === "SIGKILL",
+  );
+  await nextTurn();
+  assert.equal(exitSettled, false);
+
+  child.exitCode = 0;
+  child.emit("close", 0, null);
+  await exit;
 });
