@@ -1,16 +1,24 @@
 import { request as nodeRequest } from "node:http";
 
 export const NEXUS_STATUS_PATH = "/__nexus/status";
-export const NEXUS_STATUS_SCHEMA = 1;
+export const NEXUS_STATUS_SCHEMA = 2;
+export const NEXUS_LAUNCH_TOKEN_ENV = "NEXUS_LAUNCH_TOKEN";
 const MAX_STATUS_BYTES = 64 * 1024;
 
 function invalid(reason) {
   return Object.freeze({ ready: false, valid: false, reason });
 }
 
+function assertLaunchToken(launchToken) {
+  if (typeof launchToken !== "string" || launchToken.length === 0) {
+    throw new TypeError("launchToken must be a non-empty string");
+  }
+}
+
 export function queryNexusStatus({
   host,
   port,
+  launchToken,
   requestTimeoutMs = 1_000,
   request = nodeRequest,
 } = {}) {
@@ -20,6 +28,7 @@ export function queryNexusStatus({
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new TypeError("port must be an integer between 1 and 65535");
   }
+  assertLaunchToken(launchToken);
   if (!Number.isFinite(requestTimeoutMs) || requestTimeoutMs <= 0) {
     throw new TypeError("requestTimeoutMs must be a positive finite number");
   }
@@ -62,6 +71,9 @@ export function queryNexusStatus({
           port,
           method: "GET",
           path: NEXUS_STATUS_PATH,
+          // Deliberately do not send launchToken to the responder. A process that
+          // merely won the port race must not be able to reflect Nexus's expected
+          // value; only the launched runtime receives it through its environment.
           headers: { accept: "application/json" },
         },
         (response) => {
@@ -119,6 +131,10 @@ export function queryNexusStatus({
               settle(invalid("invalid-ready"));
               return;
             }
+            if (payload.launchToken !== launchToken) {
+              settle(invalid("launch-token-mismatch"));
+              return;
+            }
 
             settle(Object.freeze({
               ready: payload.ready,
@@ -145,6 +161,7 @@ function delay(ms) {
 export async function waitForNexusReadiness({
   host,
   port,
+  launchToken,
   exitPromise,
   startupTimeoutMs = 30_000,
   pollIntervalMs = 200,
@@ -153,6 +170,7 @@ export async function waitForNexusReadiness({
   sleep = delay,
   now = Date.now,
 } = {}) {
+  assertLaunchToken(launchToken);
   if (!exitPromise || typeof exitPromise.then !== "function") {
     throw new TypeError("exitPromise must be a promise");
   }
@@ -184,6 +202,7 @@ export async function waitForNexusReadiness({
       query({
         host,
         port,
+        launchToken,
         requestTimeoutMs: Math.min(requestTimeoutMs, Math.max(1, remaining)),
       }).then((status) => ({ type: "status", status })),
       exitPromise.then((exit) => ({ type: "exit", exit })),
