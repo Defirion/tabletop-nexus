@@ -47,9 +47,11 @@ R0 does not start game processes or proxy game traffic. A configured game's life
 
 Private port allocation is implemented as an OS-assisted loopback allocator. Nexus probes `127.0.0.1` with port `0`, closes that probe before returning the lease so the child process can bind the selected port, and keeps the port number logically claimed until the lease is released. This prevents Nexus from assigning one live allocation to multiple games. Because the probe must be closed before a separately launched game can bind, later process-start logic must still handle an external process winning that small probe-to-bind race.
 
-The remaining supervisor responsibilities are spawning manifest-declared commands directly (never through shell interpolation), supplying `HOST`/`PORT`/`BASE_PATH`, polling Nexus readiness, tracking lifecycle state, enforcing the initial one-active-game policy, and stopping children with graceful and forced phases.
+Direct local/LAN process launching is also implemented. The launcher keeps the manifest `runtime.command` and copied `runtime.args` separate through Node's child-process boundary, sets the configured game root as the working directory, explicitly disables shell execution, and returns the child handle for later lifecycle supervision.
 
-The launch boundary must also remain compatible with the stronger remote-play deployment boundary: a supported internet-facing deployment must be able to run the game under a security identity/sandbox distinct from Nexus so compromise of the game cannot open trusted player ingress or reach Nexus administration. Directly spawning a same-OS-identity child may remain useful for development/LAN operation, but it is not by itself sufficient isolation for supported remote play.
+The remaining supervisor responsibilities are supplying `HOST`/`PORT`/`BASE_PATH`, polling Nexus readiness, tracking lifecycle state, enforcing the initial one-active-game policy, and stopping children with graceful and forced phases.
+
+The launch boundary must also remain compatible with the stronger remote-play deployment boundary: a supported internet-facing deployment must be able to run the game under a security identity/sandbox distinct from Nexus so compromise of the game cannot open trusted player ingress or reach Nexus administration. The implemented direct launcher is therefore specifically the local/LAN launch mechanism; it must not become the only process-launch mechanism assumed by later supervisor code. Directly spawning a same-OS-identity child is not by itself sufficient isolation for supported remote play.
 
 The current schema-1 contract still uses configurable `runtime.healthPath`. Before R1 readiness polling is implemented, the plan requires an atomic contract/schema, validator, and test migration to the fixed private `/__nexus/status` readiness surface rather than implementing the old seam and replacing it shortly afterward.
 
@@ -66,7 +68,7 @@ The current implementation target is a trusted home LAN, not hostile multi-tenan
 - configuration and runtime commands are server-side only;
 - public static paths are allowlisted rather than mapped directly to arbitrary filesystem paths;
 - manifests are local trusted configuration, not remotely supplied launch instructions;
-- future process spawning must use executable + argument arrays without shell interpolation;
+- the local process launcher uses executable + argument arrays with explicit `shell: false` rather than shell interpolation;
 - invalid or unregistered public game routes must be rejected;
 - the reserved private game-management first path segment must never be forwarded from a player route under any ASCII case alias after canonicalization.
 
