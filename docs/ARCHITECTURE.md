@@ -47,11 +47,13 @@ R0 does not start game processes or proxy game traffic. A configured game's life
 
 Private port allocation is implemented as an OS-assisted loopback allocator. Nexus probes `127.0.0.1` with port `0`, closes that probe before returning the lease so the child process can bind the selected port, and keeps the port number logically claimed until the lease is released. This prevents Nexus from assigning one live allocation to multiple games. Because the probe must be closed before a separately launched game can bind, later process-start logic must still handle an external process winning that small probe-to-bind race.
 
-Direct local/LAN process launching is also implemented. The launcher keeps the manifest `runtime.command` and copied `runtime.args` separate through Node's child-process boundary, sets the configured game root as the working directory, explicitly disables shell execution, and returns the child handle for later lifecycle supervision.
+Direct local/LAN process launching is implemented. The local launcher keeps the manifest `runtime.command` and copied `runtime.args` separate through Node's child-process boundary, sets the configured game root as the working directory, explicitly disables shell execution, and declares that it retains Nexus's OS identity.
 
-The remaining supervisor responsibilities are supplying `HOST`/`PORT`/`BASE_PATH`, polling Nexus readiness, tracking lifecycle state, enforcing the initial one-active-game policy, and stopping children with graceful and forced phases.
+The supervisor-facing launch seam is execution-mechanism agnostic. `launchGameProcess` turns the validated installed-game inputs into an immutable executable/argument/working-directory specification and delegates that specification to an explicit launcher. Launchers declare whether they retain Nexus's OS identity or establish a distinct security boundary, and a caller that requires the stronger boundary fails closed before executing a same-identity launcher. The launcher's return value is deliberately opaque to this seam so later supervisor work does not have to assume every runtime is represented by a Node `ChildProcess`.
 
-The launch boundary must also remain compatible with the stronger remote-play deployment boundary: a supported internet-facing deployment must be able to run the game under a security identity/sandbox distinct from Nexus so compromise of the game cannot open trusted player ingress or reach Nexus administration. The implemented direct launcher is therefore specifically the local/LAN launch mechanism; it must not become the only process-launch mechanism assumed by later supervisor code. Directly spawning a same-OS-identity child is not by itself sufficient isolation for supported remote play.
+That declaration is trusted implementation metadata, not proof that a remote deployment is secure. The actual supported remote launcher/sandbox and deployment-profile evidence remain R6 work and must establish the isolation properties in `DEPLOYMENT-MODEL.md` and `REMOTE-PLAY.md` from the real game execution context.
+
+The remaining supervisor responsibilities are supplying `HOST`/`PORT`/`BASE_PATH`, polling Nexus readiness, tracking lifecycle state, enforcing the initial one-active-game policy, and stopping runtimes with graceful and forced phases through mechanisms that preserve the selected launch boundary.
 
 The current schema-1 contract still uses configurable `runtime.healthPath`. Before R1 readiness polling is implemented, the plan requires an atomic contract/schema, validator, and test migration to the fixed private `/__nexus/status` readiness surface rather than implementing the old seam and replacing it shortly afterward.
 
@@ -69,6 +71,7 @@ The current implementation target is a trusted home LAN, not hostile multi-tenan
 - public static paths are allowlisted rather than mapped directly to arbitrary filesystem paths;
 - manifests are local trusted configuration, not remotely supplied launch instructions;
 - the local process launcher uses executable + argument arrays with explicit `shell: false` rather than shell interpolation;
+- the supervisor-facing launch seam does not assume a same-identity child and can reject that mechanism before execution when a distinct security boundary is required;
 - invalid or unregistered public game routes must be rejected;
 - the reserved private game-management first path segment must never be forwarded from a player route under any ASCII case alias after canonicalization.
 

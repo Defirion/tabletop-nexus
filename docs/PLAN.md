@@ -15,7 +15,7 @@ GitHub PR state is the operational source of truth. Checkboxes describe implemen
 
 - [x] Allocate private game ports.
 - [x] Spawn manifest-declared game processes without shell interpolation.
-- [ ] Keep the launch boundary compatible with the remote-play isolation requirement: supported internet-facing deployment must be able to run games under a security identity/sandbox distinct from Nexus rather than relying on a same-OS-identity child as the only separation from trusted player ingress or administration.
+- [x] Keep the launch boundary compatible with the remote-play isolation requirement: supported internet-facing deployment must be able to run games under a security identity/sandbox distinct from Nexus rather than relying on a same-OS-identity child as the only separation from trusted player ingress or administration.
 - [ ] Supply `HOST`, `PORT`, and `BASE_PATH` as environment variables and require the child to bind the assigned private host/port.
 - [ ] Before implementing readiness polling, decide the next contract/schema migration and replace configurable `runtime.healthPath` with the fixed private `GET /__nexus/status` readiness surface, updating `GAME-CONTRACT.md`, manifest validation, and tests atomically rather than redefining schema 1 in place.
 - [ ] Poll the fixed Nexus readiness surface and expose lifecycle state.

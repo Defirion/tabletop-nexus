@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
-import { launchLocalGameProcess } from "../src/runtime/process-launcher.js";
+import {
+  GAME_LAUNCH_SECURITY_BOUNDARY,
+  createLocalGameProcessLauncher,
+  launchGameProcess,
+  launchLocalGameProcess,
+} from "../src/runtime/process-launcher.js";
 
 function installedGame(root, command, args) {
   return {
@@ -115,4 +120,68 @@ test("launchLocalGameProcess rejects a malformed argument vector before spawning
     /runtime\.args must be an array of strings/,
   );
   assert.equal(called, false);
+});
+
+test("launchGameProcess delegates an immutable launch spec to an isolated launcher and preserves an opaque handle", () => {
+  const game = installedGame("/games/example", "node", ["server.js", "--mode", "table"]);
+  const opaqueHandle = Object.freeze({ unit: "tabletop-nexus-game@example.service" });
+  let receivedSpec;
+
+  const result = launchGameProcess(game, {
+    requireDistinctSecurityBoundary: true,
+    launcher: {
+      securityBoundary: GAME_LAUNCH_SECURITY_BOUNDARY.DISTINCT_SECURITY_BOUNDARY,
+      launch(spec) {
+        receivedSpec = spec;
+        assert.equal(Object.isFrozen(spec), true);
+        assert.equal(Object.isFrozen(spec.args), true);
+        assert.throws(() => spec.args.push("--mutated"), TypeError);
+        return opaqueHandle;
+      },
+    },
+  });
+
+  assert.equal(result, opaqueHandle);
+  assert.deepEqual(receivedSpec, {
+    command: "node",
+    args: ["server.js", "--mode", "table"],
+    cwd: "/games/example",
+  });
+  assert.deepEqual(game.manifest.runtime.args, ["server.js", "--mode", "table"]);
+});
+
+test("launchGameProcess fails closed before a same-identity launcher runs when isolation is required", () => {
+  let launched = false;
+  const launcher = createLocalGameProcessLauncher({
+    spawn() {
+      launched = true;
+      return { pid: 1234 };
+    },
+  });
+
+  assert.throws(
+    () => launchGameProcess(installedGame("/games/example", "node", ["server.js"]), {
+      launcher,
+      requireDistinctSecurityBoundary: true,
+    }),
+    /requires a distinct security identity or sandbox boundary/,
+  );
+  assert.equal(launched, false);
+});
+
+test("launchGameProcess rejects an undeclared launcher boundary before launch", () => {
+  let launched = false;
+
+  assert.throws(
+    () => launchGameProcess(installedGame("/games/example", "node", ["server.js"]), {
+      launcher: {
+        securityBoundary: "probably-isolated",
+        launch() {
+          launched = true;
+        },
+      },
+    }),
+    /securityBoundary must declare a supported game launch boundary/,
+  );
+  assert.equal(launched, false);
 });
