@@ -35,23 +35,27 @@ Design for hostile public HTTP/WebSocket traffic, including:
 - long-lived/slow connection exhaustion;
 - normal vulnerabilities in trusted game/runtime dependencies.
 
-Installed games are trusted code selected by the host. They are not treated as malicious tenants in the initial design.
+Installed games are trusted code selected by the host. They are not treated as malicious tenants in the initial design. That trust does **not** mean a game process compromised through a dependency exploit may reach Nexus control-plane authority; the local runtime boundary below remains required.
 
 ### 2.2 VM and process isolation
 
 A dedicated Linux VM is the primary physical-host blast-radius boundary. Give the VM explicit CPU/RAM limits.
 
-Containers are **not mandatory** for initial support. The lightweight baseline is:
+Containers are **not mandatory** for initial support. The lightweight supported-remote baseline is:
 
-- `cloudflared` and Nexus run as separate unprivileged services;
-- game processes run unprivileged;
+- `cloudflared`, Nexus, and the game runtime execute under separated unprivileged security identities or an equivalent sandbox boundary;
+- the game launch/supervision mechanism applies that separation even though Nexus initiates lifecycle actions;
+- game processes cannot open the trusted Nexus player-ingress socket;
+- game processes cannot connect to the Nexus admin listener/control plane from the local host;
 - games do not inherit/read `cloudflared` credentials;
 - per-game/process CPU, memory, task/process, and file-descriptor limits exist;
 - graceful stop, forced stop, and crash-loop suppression exist.
 
-VM-only limits protect the physical host but do not prevent one runaway game from starving Nexus inside the VM, hence the process limits.
+A direct child that retains Nexus's effective OS identity is not sufficient for supported remote play when local filesystem/socket identity is part of the security boundary. A service manager, dedicated launcher, sandbox, container, or another provider-independent mechanism may enforce the separation; the required property is that code executing in the game-runtime context cannot use Nexus's local privileges.
 
-Rootless containers or stronger systemd sandboxing remain future hardening options if games become untrusted.
+VM-only limits protect the physical host but do not prevent one runaway or compromised game from starving or controlling Nexus inside the VM, hence both resource limits and control-plane isolation are required.
+
+Rootless containers or stronger systemd sandboxing remain optional implementation choices; containers are not mandatory so long as the required isolation properties are actually enforced.
 
 ### 2.3 Zero-friction players
 
@@ -66,6 +70,8 @@ If a game needs private rooms, join codes, host admission, or random room IDs, t
 Tailscale is the initial admin identity/network boundary. Configure explicit Tailscale grants/ACLs for the intended administrator identity/device(s); do not rely on broad default tailnet reachability.
 
 The public Cloudflare route must never expose process-control or admin endpoints.
+
+Because public traffic intentionally reaches game runtimes on the same VM, Tailscale alone is not the whole local boundary: the game-runtime execution context must also be unable to connect to the Nexus admin listener. Browser CSRF/Host/frame protections do not authenticate a raw local process and cannot substitute for that host-local isolation.
 
 No separate Nexus admin login is required initially, but the admin HTTP surface still requires browser-layer defenses:
 
@@ -144,7 +150,7 @@ Resolve the exact credential model before production Cloudflare deployment.
 
 Ordinary public-internet egress from the VM is permitted initially. A complex destination-by-destination default-deny policy is not required.
 
-However, game/VM processes should not have unnecessary access to sensitive home-LAN administration surfaces or unrelated Tailscale peers. Prefer a network/firewall/Tailscale configuration that permits normal internet access while denying lateral access to things such as router/NAS admin services, desktop file shares, and unrelated tailnet devices unless explicitly required.
+However, game/VM processes should not have unnecessary access to sensitive home-LAN administration surfaces or unrelated Tailscale peers. Prefer a network/firewall/Tailscale configuration that permits normal internet access while denying lateral access to things such as router/NAS admin services, desktop file shares, unrelated tailnet devices, and the Nexus admin listener unless explicitly required by a separately authenticated boundary.
 
 ## 3. Target topology
 
@@ -166,7 +172,7 @@ HOST / ADMIN DEVICE
 +--------------------------------------------------+
 |             Dedicated Linux VM                   |
 |                                                  |
-| Nexus supervisor -> private game processes       |
+| Nexus supervisor -> isolated game runtime        |
 |                                                  |
 | cloudflared -> Nexus player Unix socket          |
 +----------------------+---------------------------+
@@ -209,8 +215,10 @@ Required properties:
 
 - no player TCP listener exposed to LAN/internet;
 - restrictive socket-directory ownership and permissions;
-- game processes cannot open the socket;
+- game processes cannot open the socket, including after code execution inside the game runtime;
 - `cloudflared` is the only non-Nexus service allowed to use it.
+
+The game-runtime identity/sandbox must make the socket denial real. If Nexus directly launches a child under the same effective OS identity that owns/opens the socket, ordinary Unix permissions cannot distinguish that child from Nexus and the boundary is not satisfied.
 
 The exclusive local channel is also what allows Nexus to trust selected Cloudflare-provided attribution headers.
 
@@ -227,7 +235,7 @@ Expose only intended player functionality, conceptually:
 ```text
 /                       player portal
 /api/games              safe public game/lifecycle metadata
-/games/<registered-id>/* reverse proxy to running game
+/games/<registered-id>/* reverse proxy to running game, except reserved management paths
 ```
 
 The safe public game API may continue to describe configured/registered games, but the public surface must not expose start/stop/process controls. Player UI must clearly distinguish unavailable games from player-routable ones, and a game route becomes enterable only after Nexus readiness says the runtime may receive players.
@@ -237,11 +245,15 @@ Never expose through the public route:
 ```text
 /admin/*
 /api/admin/*
+/games/<id>/__nexus
+/games/<id>/__nexus/*
 runtime command/args
 filesystem paths/config
 sensitive logs
 arbitrary process control
 ```
+
+`/__nexus` is the reserved private runtime-management namespace after the game `BASE_PATH` is removed. The player proxy must never forward a request whose canonical post-prefix target is exactly `/__nexus` or begins `/__nexus/`. This keeps `GET /__nexus/status` and any future management surface private even though ordinary game routes use prefix stripping.
 
 ## 6. R2 proxy hardening requirements
 
@@ -251,8 +263,12 @@ These are part of remote-play support even if implementation lands after the bas
 
 - `<game-id>` must resolve to an actual registered game.
 - Never derive arbitrary backend destinations from untrusted path text.
-- Canonicalize/validate URL paths before proxying.
+- Canonicalize/validate URL paths before proxying and use one well-defined path interpretation for routing/security decisions.
 - Reject escaped/ambiguous traversal such as `..`, encoded `..`, and other forms that could escape `/games/<id>/`.
+- After canonicalization and removal of `/games/<id>`, reject targets equal to `/__nexus` or beneath `/__nexus/`; the reserved management namespace is never player-proxyable.
+- Encoded namespace characters/separators, dot-segment forms, duplicate-separator forms, or other ambiguous encodings that could resolve into the reserved namespace must fail closed rather than reaching the game.
+- Regression coverage must include the exact public `/games/<id>/__nexus/status` path and encoded/canonicalization variants, plus unchanged controls proving ordinary routes such as the game root and normal API/WS paths still proxy successfully.
+- The private Nexus-to-game readiness poll to `GET /__nexus/status` remains a positive control and must continue to work directly on the assigned private game host/port.
 
 ### 6.2 Host validation
 
@@ -379,6 +395,8 @@ Cloudflare:                              outbound tunnel
 Tailscale:                               explicit admin-only access
 Nexus -> game ports:                     local/private
 Game ports -> LAN/internet:              unreachable
+Game runtime -> Nexus player socket:     denied
+Game runtime -> Nexus admin listener:    denied
 VM/games -> sensitive LAN/Tailscale:     denied unless required
 VM/games -> ordinary public internet:    allowed initially
 ```
@@ -386,6 +404,8 @@ VM/games -> ordinary public internet:    allowed initially
 Verify IPv4 **and IPv6**.
 
 Games receive `HOST`, `PORT`, and `BASE_PATH` and must honor the assigned private bind host. A game that cannot bind privately must be rejected for supported remote play or wrapped by deployment-level enforcement before use.
+
+The local-isolation checks must be executed from the same security identity/sandbox used by the real game runtime. Positive controls should prove that Nexus can still reach the assigned game listener, `cloudflared` can still open the player socket, the intended administrator can still reach the admin listener over the private path, and the game retains explicitly allowed ordinary internet egress.
 
 ## 10. Browser/HTTPS security
 
@@ -414,7 +434,7 @@ Baseline structured events should cover at least:
 - game start/started/start-failed/idle/stop/force-stop/crash/crash-loop;
 - expected-player and idle-timeout changes;
 - remote-play enabled/disabled;
-- invalid route/path/Host/WS-origin events;
+- invalid route/path/Host/WS-origin events, including attempts to enter the reserved runtime-management namespace through player routing;
 - size/rate/connection-limit events;
 - client-count/anomaly warnings.
 
@@ -458,7 +478,7 @@ Suggested incident sequence:
 
 Accepted for the initial friends-only mode:
 
-- trusted installed games rather than hostile tenants;
+- trusted installed games rather than hostile tenants, while still containing ordinary game/runtime compromise away from Nexus control-plane authority;
 - no mandatory containers;
 - ordinary public-internet egress;
 - no mandatory player identity;
@@ -507,50 +527,53 @@ This remains intentionally **undecided** until that discussion occurs.
 ### Phase B — R2 and proxy hardening
 
 6. Implement HTTP reverse proxy, WS upgrades, SSE, registered-route rejection, and end-to-end tests.
-7. Add path and Host validation.
-8. Add forwarded-header/client-attribution policy.
-9. Add HTTP size/time/connection limits and framing regressions.
-10. Add WS Origin/message/connection/backpressure behavior and default-off compression policy.
-11. Add safe backend-down responses.
+7. Add path and Host validation, including fail-closed rejection of the reserved `/__nexus` runtime-management namespace after canonicalization/prefix removal.
+8. Add regressions for exact, encoded, and canonicalization variants of `/games/<id>/__nexus/status`, with normal game routes and direct private readiness polling retained as positive controls.
+9. Add forwarded-header/client-attribution policy.
+10. Add HTTP size/time/connection limits and framing regressions.
+11. Add WS Origin/message/connection/backpressure behavior and default-off compression policy.
+12. Add safe backend-down responses.
 
 ### Phase C — local security boundary
 
-12. Separate admin/player interfaces.
-13. Add admin CSRF/frame/Host protections.
-14. Add supported Unix-socket player ingress and verify permissions.
-15. Establish VM CPU/RAM and game process limits.
-16. Separate `cloudflared`/Nexus/game privilege and credential visibility.
-17. Configure Tailscale admin grants.
-18. Restrict unnecessary access to sensitive LAN/tailnet peers.
+13. Separate admin/player interfaces.
+14. Establish the game-runtime execution boundary: supported remote play runs games under a distinct OS security identity/sandbox and denies that context both the player Unix socket and the local Nexus admin listener.
+15. Add admin CSRF/frame/Host protections.
+16. Add supported Unix-socket player ingress and verify permissions against the actual game-runtime identity.
+17. Establish VM CPU/RAM and game process limits.
+18. Separate `cloudflared`/Nexus/game privilege and credential visibility.
+19. Configure Tailscale admin grants.
+20. Restrict unnecessary access to sensitive LAN/tailnet peers.
 
 ### Phase D — public ingress
 
-19. Resolve Cloudflare credential decision.
-20. Configure Tunnel to the player socket only.
-21. Verify no game/admin public or LAN exposure over IPv4/IPv6.
-22. Bind trusted client attribution to the exclusive ingress path.
-23. Configure/test edge rate/cache behavior.
-24. Implement/test local and external kill switches.
+21. Resolve Cloudflare credential decision.
+22. Configure Tunnel to the player socket only.
+23. Verify no game/admin public or LAN exposure over IPv4/IPv6.
+24. Bind trusted client attribution to the exclusive ingress path.
+25. Configure/test edge rate/cache behavior.
+26. Implement/test local and external kill switches.
 
 ### Phase E — visibility and UX
 
-25. Add expected-player setting and approximate presence telemetry.
-26. Add route/IP/connection-rate anomaly signals independent of cookies.
-27. Add structured warnings and safe throttling.
-28. Add stable invite URL, copy link, and QR.
-29. Verify no-login friend join and game-owned rooms.
-30. Add configurable idle shutdown.
+27. Add expected-player setting and approximate presence telemetry.
+28. Add route/IP/connection-rate anomaly signals independent of cookies.
+29. Add structured warnings and safe throttling.
+30. Add stable invite URL, copy link, and QR.
+31. Verify no-login friend join and game-owned rooms.
+32. Add configurable idle shutdown.
 
 ### Phase F — assurance
 
-31. Verify browser secure-context features and WS/SSE through Cloudflare.
-32. Verify admin CSRF/Host behavior from hostile browser contexts.
-33. Verify HTTP framing, path, Host, header, and WS protections.
-34. Verify IPv4/IPv6/LAN/tailnet boundaries.
-35. Verify credential isolation and generic failure responses.
-36. Verify anomaly events and both kill switches.
-37. Create companion security/GRC artifacts.
-38. Declare remote play supported only after the acceptance gate passes.
+33. Verify browser secure-context features and WS/SSE through Cloudflare.
+34. Verify admin CSRF/Host behavior from hostile browser contexts.
+35. Verify HTTP framing, path, Host, header, and WS protections, including reserved-management path rejection.
+36. Verify IPv4/IPv6/LAN/tailnet boundaries.
+37. From the real game-runtime execution context, verify both trusted player ingress and the Nexus admin listener are unreachable while assigned game networking and allowed egress remain functional.
+38. Verify credential isolation and generic failure responses.
+39. Verify anomaly events and both kill switches.
+40. Create companion security/GRC artifacts.
+41. Declare remote play supported only after the acceptance gate passes.
 
 ## 16. Remote-play support gate
 
@@ -559,7 +582,9 @@ This remains intentionally **undecided** until that discussion occurs.
 - [ ] No game port is reachable from internet or unintended LAN paths.
 - [ ] Admin is unreachable through player ingress.
 - [ ] Supported Linux ingress uses a protected Unix socket or a documented compensated exception.
-- [ ] Unauthorized game/local processes cannot reach the player socket.
+- [ ] From the actual game-runtime security identity/sandbox, opening the trusted player socket fails.
+- [ ] From the actual game-runtime security identity/sandbox, connecting to the Nexus admin listener/control plane fails.
+- [ ] Positive controls confirm Nexus can reach the assigned game listener, `cloudflared` can reach player ingress, intended Tailscale administration still works, and explicitly allowed game egress still works.
 - [ ] Explicit Tailscale admin grants exist.
 - [ ] Sensitive LAN/unrelated tailnet reachability is restricted.
 - [ ] IPv4 and IPv6 boundaries are verified.
@@ -569,6 +594,9 @@ This remains intentionally **undecided** until that discussion occurs.
 
 - [ ] Only registered game IDs route.
 - [ ] Escaped/ambiguous traversal variants are rejected.
+- [ ] `/games/<id>/__nexus/status` is rejected by player routing and never reaches the game management endpoint.
+- [ ] Encoded/canonicalization variants that could resolve to `/__nexus` or `/__nexus/*` fail closed.
+- [ ] Normal game-root/API/WS routes remain routable as unchanged controls, and direct private Nexus readiness polling still works.
 - [ ] Player and admin Host policies work.
 - [ ] Forwarded headers/client attribution follow the trusted-ingress policy.
 - [ ] Body/header/connection/time limits exist.
@@ -582,6 +610,7 @@ This remains intentionally **undecided** until that discussion occurs.
 
 - [ ] Admin state-changing actions are CSRF-protected and not frameable.
 - [ ] Admin action audit events exist.
+- [ ] The supported remote game launch path does not leave the game under Nexus's effective OS security identity unless an equivalent sandbox/application-auth boundary independently enforces both local deny rules.
 - [ ] VM CPU/RAM and game process limits exist.
 - [ ] `cloudflared`, Nexus, and games have separated privilege/credential visibility.
 - [ ] Tunnel credentials are unreadable to Nexus/game processes.
@@ -618,34 +647,3 @@ Revisit this architecture if any of these become true:
 - paid hosting is offered;
 - game repositories cannot be treated as trusted;
 - public abuse makes zero-auth access impractical.
-
-Possible future controls include Cloudflare Access/player auth, session authorization, rootless containers, stronger per-game sandboxing/egress controls, per-game subdomains, stronger admin auth, and fuller IDS/SIEM integration.
-
-## 18. External implementation references
-
-These are implementation references, not project requirements by themselves:
-
-- Cloudflare Tunnel routing: https://developers.cloudflare.com/tunnel/routing/
-- Cloudflare Tunnel architecture: https://developers.cloudflare.com/tunnel/
-- Cloudflare tunnel tokens: https://developers.cloudflare.com/tunnel/advanced/tunnel-tokens/
-- Cloudflare local tunnel management/credentials: https://developers.cloudflare.com/tunnel/advanced/local-management/
-- Tailscale grants examples: https://tailscale.com/docs/reference/examples/grants
-
-## 19. Guiding principles
-
-1. No game process is directly internet-facing.
-2. No admin process-control route is player-facing.
-3. No router port forwarding is required.
-4. Tailscale is the private admin boundary; admin HTTP still gets Host/CSRF/browser protections.
-5. Cloudflare Tunnel is the public player ingress.
-6. Supported Linux ingress prefers an exclusive permission-controlled Unix socket.
-7. Players receive one normal HTTPS URL/QR with near-zero friction.
-8. Nexus observes transport behavior without learning game rules.
-9. Expected-player/presence counts are telemetry, not authentication.
-10. Rate/anomaly decisions use multiple independent signals.
-11. The dedicated VM protects the physical host; lightweight process limits protect availability inside it.
-12. Ordinary internet egress is acceptable initially; unnecessary sensitive-LAN/tailnet access is not.
-13. `cloudflared` credentials are isolated from Nexus/games regardless of the final credential choice.
-14. Idle shutdown is lifecycle management, not a security boundary.
-15. `HOST` / `PORT` / `BASE_PATH` remains the game runtime integration boundary.
-16. Remote play is called supported only after the acceptance gate passes.
