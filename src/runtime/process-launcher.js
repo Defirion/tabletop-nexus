@@ -131,6 +131,7 @@ function trackChildExit(child) {
 export function createLocalGameProcessLauncher({
   spawn = nodeSpawn,
   parentEnv = process.env,
+  captureOutput = false,
   setTimeoutFn = setTimeout,
   clearTimeoutFn = clearTimeout,
 } = {}) {
@@ -139,6 +140,9 @@ export function createLocalGameProcessLauncher({
   }
   if (parentEnv === null || Array.isArray(parentEnv) || typeof parentEnv !== "object") {
     throw new TypeError("parentEnv must be an object");
+  }
+  if (typeof captureOutput !== "boolean") {
+    throw new TypeError("captureOutput must be a boolean");
   }
   if (typeof setTimeoutFn !== "function" || typeof clearTimeoutFn !== "function") {
     throw new TypeError("timer functions must be functions");
@@ -153,6 +157,12 @@ export function createLocalGameProcessLauncher({
         cwd: spec.cwd,
         shell: false,
         env: { ...parentEnv, ...spec.environment },
+        // Supervisor launchers must never leave hidden stdout/stderr pipes with
+        // no consumer. Direct launch opts into captureOutput below so callers
+        // that receive the ChildProcess can still consume those streams.
+        stdio: captureOutput
+          ? ["ignore", "pipe", "pipe"]
+          : ["ignore", "ignore", "ignore"],
       });
       exits.set(child, trackChildExit(child));
       return child;
@@ -204,8 +214,9 @@ export function createLocalGameProcessLauncher({
  *
  * The launcher receives only an immutable executable/argument/cwd/environment
  * specification rather than the installed-game object. The environment contains
- * Nexus-owned launch variables such as HOST, PORT, and BASE_PATH; a local launcher
- * merges them over its inherited environment at the child-process boundary.
+ * Nexus-owned launch variables such as HOST, PORT, BASE_PATH, and the private
+ * readiness association token; a local launcher merges them over its inherited
+ * environment at the child-process boundary.
  */
 export function launchGameProcess(
   game,
@@ -250,13 +261,17 @@ export function launchSupervisedGameProcess(
 
 /**
  * Launches one validated game directly for the local/LAN runtime profile.
+ *
+ * Direct callers receive the ChildProcess, so stdout/stderr remain piped for the
+ * caller to consume. The supervised local launcher defaults to discarded output
+ * instead, avoiding an unowned pipe/backpressure dependency.
  */
 export function launchLocalGameProcess(
   game,
   { spawn = nodeSpawn, parentEnv = process.env, environment = {} } = {},
 ) {
   return launchGameProcess(game, {
-    launcher: createLocalGameProcessLauncher({ spawn, parentEnv }),
+    launcher: createLocalGameProcessLauncher({ spawn, parentEnv, captureOutput: true }),
     environment,
   });
 }
