@@ -6,7 +6,7 @@ The boundary is runtime integration, not game design: **Nexus knows how to run g
 
 ## Contract version
 
-Current schema: `2`.
+Current manifest schema: `2`.
 
 Schema 2 replaces schema 1's configurable `runtime.healthPath` with the fixed private Nexus readiness surface `GET /__nexus/status`. Schema 1 is no longer accepted by the current validator; this is an explicit contract migration rather than a silent redefinition of schema 1.
 
@@ -54,7 +54,7 @@ The manifest is server-side runtime configuration. Nexus may expose these fields
 - `capabilities`;
 - Nexus-owned lifecycle status.
 
-Nexus must not expose configured filesystem roots, `runtime.command`, or `runtime.args` through its public API. Runtime details are execution authority, not library-card metadata.
+Nexus must not expose configured filesystem roots, `runtime.command`, `runtime.args`, or the per-launch readiness token through its public API. Runtime details are execution authority, not library-card metadata.
 
 ## Runtime environment and private bind
 
@@ -62,9 +62,12 @@ Nexus launches the declared command with the game repository as the working dire
 
 - `HOST`: Nexus-selected private bind host;
 - `PORT`: Nexus-selected private port;
-- `BASE_PATH`: canonical public route assigned to the game, `/games/<game-id>`, without a trailing slash.
+- `BASE_PATH`: canonical public route assigned to the game, `/games/<game-id>`, without a trailing slash;
+- `NEXUS_LAUNCH_TOKEN`: opaque unpredictable value generated separately for each launch and used only to associate the private readiness response with that launched runtime.
 
 The runtime must bind its browser-facing listener to the exact supplied `HOST` and `PORT`. It must not widen the bind to `0.0.0.0`, `::`, or another interface in Nexus mode. If the assigned bind cannot be satisfied, startup must fail rather than choosing another address or fixed port.
+
+`NEXUS_LAUNCH_TOKEN` is not game/session identity and is not authorization for player actions. The runtime must keep it on the private Nexus management seam and echo it only in the readiness payload described below. Nexus does not send the expected token in its readiness request, so a different process that merely wins the assigned port cannot satisfy readiness by reflecting request data.
 
 ### Base-path behavior
 
@@ -86,26 +89,30 @@ Every schema-2 runtime must expose this private endpoint on the assigned `HOST` 
 GET /__nexus/status
 ```
 
-A well-formed response returns HTTP `200`, `Content-Type: application/json`, and a JSON object using status-payload schema 1:
+A well-formed response returns HTTP `200`, `Content-Type: application/json`, and a JSON object using status-payload schema 2:
 
 ```json
 {
-  "schema": 1,
-  "ready": true
+  "schema": 2,
+  "ready": true,
+  "launchToken": "<exact NEXUS_LAUNCH_TOKEN value>"
 }
 ```
+
+Status-payload schema 2 replaces the earlier payload schema 1 because readiness now establishes both player-readiness and association with the specific runtime Nexus launched. Payload schema 1 is not accepted by the current readiness client.
 
 `ready` has one platform meaning: **Nexus may route players to this runtime.**
 
 Requirements:
 
-- `schema` is the integer status-payload schema version and is currently `1`;
+- `schema` is the integer status-payload schema version and is currently `2`;
 - `ready` is a required boolean;
-- `ready: false` is a valid response meaning the runtime is alive but not yet player-ready;
+- `launchToken` is required and must exactly equal the `NEXUS_LAUNCH_TOKEN` supplied to that runtime at launch;
+- `ready: false` is a valid response meaning the associated runtime is alive but not yet player-ready;
 - unknown fields are ignored when the status schema is supported;
-- the endpoint requires no authentication or game state, is side-effect free, and returns promptly.
+- the endpoint requires no player authentication or game state, is side-effect free, and returns promptly.
 
-Timeouts, connection failures, non-`200` responses, non-JSON content, malformed JSON, unsupported status schemas, or missing/invalid required fields are treated as not ready. Nexus never consults a manifest-configured readiness path.
+A response with a missing or mismatched launch token is not ready even if every other field is valid and `ready` is `true`. Timeouts, connection failures, non-`200` responses, non-JSON content, malformed JSON, unsupported status schemas, or missing/invalid required fields are likewise treated as not ready. Nexus never consults a manifest-configured readiness path.
 
 The `__nexus` first path segment is private runtime-management space. R2 reserves that segment case-insensitively after canonicalization so the readiness surface cannot be reached through a public player route.
 
