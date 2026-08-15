@@ -247,13 +247,16 @@ Never expose through the public route:
 /api/admin/*
 /games/<id>/__nexus
 /games/<id>/__nexus/*
+ASCII case aliases such as /games/<id>/__NEXUS/*
 runtime command/args
 filesystem paths/config
 sensitive logs
 arbitrary process control
 ```
 
-`/__nexus` is the reserved private runtime-management namespace after the game `BASE_PATH` is removed. The player proxy must never forward a request whose canonical post-prefix target is exactly `/__nexus` or begins `/__nexus/`. This keeps `GET /__nexus/status` and any future management surface private even though ordinary game routes use prefix stripping.
+`/__nexus` is the canonical private runtime-management namespace after the game `BASE_PATH` is removed. The player proxy must never forward a request whose canonical post-prefix **first path segment** equals ASCII `__nexus` case-insensitively. That whole-segment reservation covers `/__nexus`, `/__NEXUS`, `/__Nexus`, and encoded forms that canonicalize to those aliases, whether the target stops at the segment or continues beneath it. This keeps `GET /__nexus/status` and any future management surface private independently of the backend game's route-case behavior.
+
+The reservation is not a prefix wildcard over arbitrary longer names: a distinct first segment such as `__nexusx` or `__nexus-status` remains an ordinary game-owned name unless another rule rejects it.
 
 ## 6. R2 proxy hardening requirements
 
@@ -265,10 +268,11 @@ These are part of remote-play support even if implementation lands after the bas
 - Never derive arbitrary backend destinations from untrusted path text.
 - Canonicalize/validate URL paths before proxying and use one well-defined path interpretation for routing/security decisions.
 - Reject escaped/ambiguous traversal such as `..`, encoded `..`, and other forms that could escape `/games/<id>/`.
-- After canonicalization and removal of `/games/<id>`, reject targets equal to `/__nexus` or beneath `/__nexus/`; the reserved management namespace is never player-proxyable.
-- Encoded namespace characters/separators, dot-segment forms, duplicate-separator forms, or other ambiguous encodings that could resolve into the reserved namespace must fail closed rather than reaching the game.
-- Regression coverage must include the exact public `/games/<id>/__nexus/status` path and encoded/canonicalization variants, plus unchanged controls proving ordinary routes such as the game root and normal API/WS paths still proxy successfully.
-- The private Nexus-to-game readiness poll to `GET /__nexus/status` remains a positive control and must continue to work directly on the assigned private game host/port.
+- After canonicalization and removal of `/games/<id>`, compare the first path segment to ASCII `__nexus` case-insensitively and reject the target when it matches; backend framework/router case sensitivity is not part of this security boundary.
+- Encoded namespace characters/separators, encoded mixed-case aliases, dot-segment forms, duplicate-separator forms, or other ambiguous encodings that could resolve into any ASCII case alias of the reserved segment must fail closed rather than reaching the game.
+- Regression coverage must include lowercase `/games/<id>/__nexus/status`, direct mixed-case aliases such as `/games/<id>/__NEXUS/status` and `/games/<id>/__Nexus/status`, and encoded mixed-case/canonicalization variants.
+- Regression coverage must retain unchanged controls proving ordinary routes such as the game root and normal API/WS paths still proxy successfully, plus near-name controls such as `/games/<id>/__nexusx/status` and `/games/<id>/__nexus-status` to prove the block is a whole-segment comparison rather than an overbroad prefix test.
+- The private Nexus-to-game readiness poll to canonical `GET /__nexus/status` remains a positive control and must continue to work directly on the assigned private game host/port.
 
 ### 6.2 Host validation
 
@@ -434,7 +438,7 @@ Baseline structured events should cover at least:
 - game start/started/start-failed/idle/stop/force-stop/crash/crash-loop;
 - expected-player and idle-timeout changes;
 - remote-play enabled/disabled;
-- invalid route/path/Host/WS-origin events, including attempts to enter the reserved runtime-management namespace through player routing;
+- invalid route/path/Host/WS-origin events, including lowercase, mixed-case, or encoded attempts to enter the reserved runtime-management namespace through player routing;
 - size/rate/connection-limit events;
 - client-count/anomaly warnings.
 
@@ -527,8 +531,8 @@ This remains intentionally **undecided** until that discussion occurs.
 ### Phase B — R2 and proxy hardening
 
 6. Implement HTTP reverse proxy, WS upgrades, SSE, registered-route rejection, and end-to-end tests.
-7. Add path and Host validation, including fail-closed rejection of the reserved `/__nexus` runtime-management namespace after canonicalization/prefix removal.
-8. Add regressions for exact, encoded, and canonicalization variants of `/games/<id>/__nexus/status`, with normal game routes and direct private readiness polling retained as positive controls.
+7. Add path and Host validation, including fail-closed rejection after canonicalization/prefix removal when the first path segment is an ASCII case-insensitive match for reserved `__nexus`.
+8. Add regressions for lowercase, direct mixed-case, encoded mixed-case, and other canonicalization variants of `/games/<id>/__nexus/status`; retain normal game routes, near-name whole-segment controls, and direct private readiness polling as positive controls.
 9. Add forwarded-header/client-attribution policy.
 10. Add HTTP size/time/connection limits and framing regressions.
 11. Add WS Origin/message/connection/backpressure behavior and default-off compression policy.
@@ -567,7 +571,7 @@ This remains intentionally **undecided** until that discussion occurs.
 
 33. Verify browser secure-context features and WS/SSE through Cloudflare.
 34. Verify admin CSRF/Host behavior from hostile browser contexts.
-35. Verify HTTP framing, path, Host, header, and WS protections, including reserved-management path rejection.
+35. Verify HTTP framing, path, Host, header, and WS protections, including lowercase/mixed-case/encoded reserved-management path rejection.
 36. Verify IPv4/IPv6/LAN/tailnet boundaries.
 37. From the real game-runtime execution context, verify both trusted player ingress and the Nexus admin listener are unreachable while assigned game networking and allowed egress remain functional.
 38. Verify credential isolation and generic failure responses.
@@ -594,9 +598,10 @@ This remains intentionally **undecided** until that discussion occurs.
 
 - [ ] Only registered game IDs route.
 - [ ] Escaped/ambiguous traversal variants are rejected.
-- [ ] `/games/<id>/__nexus/status` is rejected by player routing and never reaches the game management endpoint.
-- [ ] Encoded/canonicalization variants that could resolve to `/__nexus` or `/__nexus/*` fail closed.
-- [ ] Normal game-root/API/WS routes remain routable as unchanged controls, and direct private Nexus readiness polling still works.
+- [ ] `/games/<id>/__nexus/status` and direct ASCII case aliases such as `/games/<id>/__NEXUS/status` and `/games/<id>/__Nexus/status` are rejected by player routing and never reach the game management endpoint.
+- [ ] Encoded mixed-case/canonicalization variants that could resolve to any ASCII case alias of the reserved `__nexus` first segment fail closed.
+- [ ] Near-name controls such as `/games/<id>/__nexusx/status` and `/games/<id>/__nexus-status` remain ordinary routable game paths when defined, proving the reservation is not an overbroad prefix block.
+- [ ] Normal game-root/API/WS routes remain routable as unchanged controls, and direct private Nexus readiness polling of canonical `GET /__nexus/status` still works.
 - [ ] Player and admin Host policies work.
 - [ ] Forwarded headers/client attribution follow the trusted-ingress policy.
 - [ ] Body/header/connection/time limits exist.
