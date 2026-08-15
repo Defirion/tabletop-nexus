@@ -16,7 +16,7 @@ GitHub PR state is the operational source of truth. Checkboxes describe implemen
 - [x] Allocate private game ports.
 - [ ] Spawn manifest-declared game processes without shell interpolation.
 - [ ] Supply `HOST`, `PORT`, and `BASE_PATH`.
-- [ ] Poll game health and expose lifecycle state.
+- [ ] Poll game readiness and expose lifecycle state.
 - [ ] Implement graceful stop plus forced-shutdown fallback.
 - [ ] Add lifecycle tests using a tiny original fixture game.
 
@@ -27,6 +27,15 @@ GitHub PR state is the operational source of truth. Checkboxes describe implemen
 - [ ] Verify SSE/streaming behavior.
 - [ ] Reject invalid/unregistered game routes.
 - [ ] Add end-to-end routing tests against the fixture game.
+
+## Contract revision gate before R3
+
+Before adapting the real games, promote the deliberately selected stricter common game shape into the normative contract and implementation together.
+
+- [ ] Decide the schema/version migration for the stricter contract; do not silently redefine already-valid schema-1 manifests.
+- [ ] Replace configurable `runtime.healthPath` with the fixed private `GET /__nexus/status` readiness surface, and update manifest validation/tests atomically.
+- [ ] Promote the selected runtime/browser/session requirements recorded in `docs/GAME-AUTHORING-GUIDE.md`, including same-origin `BASE_PATH` behavior, clean shutdown, server-authoritative shared state, and session/recovery expectations where applicable.
+- [ ] Add reusable compatibility checks for the promoted integration requirements without teaching Nexus game rules or game-specific payloads.
 
 ## R3 — First real adapters
 
