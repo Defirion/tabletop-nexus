@@ -76,23 +76,41 @@ function createRecordingAllocator() {
 
 function createFirstProcessSignalFailureLauncher() {
   let spawnCount = 0;
+  let firstPid = null;
   let allowFirstTermination = false;
+  const realProcessKill = process.kill.bind(process);
   const launcher = createLocalGameProcessLauncher({
+    processKill(pid, signal) {
+      if (
+        process.platform !== "win32" &&
+        firstPid !== null &&
+        pid === -firstPid &&
+        !allowFirstTermination
+      ) {
+        const error = new Error(`synthetic ${signal} delivery failure`);
+        error.code = "EPERM";
+        throw error;
+      }
+      return realProcessKill(pid, signal);
+    },
     spawn(command, args, options) {
       const child = nodeSpawn(command, args, options);
       spawnCount += 1;
       if (spawnCount === 1) {
-        const realKill = child.kill.bind(child);
-        child.kill = (signal) => {
-          if (!allowFirstTermination) {
-            queueMicrotask(() => child.emit("error", Object.assign(
-              new Error(`synthetic ${signal} delivery failure`),
-              { code: "EPERM" },
-            )));
-            return false;
-          }
-          return realKill(signal);
-        };
+        firstPid = child.pid;
+        if (process.platform === "win32") {
+          const realKill = child.kill.bind(child);
+          child.kill = (signal) => {
+            if (!allowFirstTermination) {
+              queueMicrotask(() => child.emit("error", Object.assign(
+                new Error(`synthetic ${signal} delivery failure`),
+                { code: "EPERM" },
+              )));
+              return false;
+            }
+            return realKill(signal);
+          };
+        }
       }
       return child;
     },
