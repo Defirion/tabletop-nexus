@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -12,27 +13,17 @@ import {
 } from "../src/runtime/process-launcher.js";
 
 function installedGame(root, command, args) {
-  return {
-    root,
-    manifest: {
-      runtime: { command, args },
-    },
-  };
+  return { root, manifest: { runtime: { command, args } } };
 }
 
 function collectChild(child) {
   return new Promise((resolveResult, reject) => {
     let stdout = "";
     let stderr = "";
-
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
     child.once("error", reject);
     child.once("close", (code, signal) => {
       if (code !== 0) {
@@ -44,9 +35,9 @@ function collectChild(child) {
   });
 }
 
-test("launchLocalGameProcess keeps executable, arguments, and shell boundary separate", () => {
+test("launchLocalGameProcess keeps executable, arguments, environment, and shell boundary separate", () => {
   const calls = [];
-  const child = { pid: 1234 };
+  const child = Object.assign(new EventEmitter(), { pid: 1234, exitCode: null, signalCode: null });
   const game = installedGame(
     "/games/example",
     "game-server; unexpected-shell-command",
@@ -54,6 +45,8 @@ test("launchLocalGameProcess keeps executable, arguments, and shell boundary sep
   );
 
   const result = launchLocalGameProcess(game, {
+    parentEnv: { KEEP: "yes", HOST: "wrong" },
+    environment: { HOST: "127.0.0.1", PORT: "43123", BASE_PATH: "/games/example" },
     spawn(command, args, options) {
       calls.push({ command, args, options });
       return child;
@@ -61,28 +54,25 @@ test("launchLocalGameProcess keeps executable, arguments, and shell boundary sep
   });
 
   assert.equal(result, child);
-  assert.deepEqual(calls, [
-    {
-      command: "game-server; unexpected-shell-command",
-      args: ["--label", "$(whoami)", "a&b", "pipe|value"],
-      options: {
-        cwd: "/games/example",
-        shell: false,
+  assert.deepEqual(calls, [{
+    command: "game-server; unexpected-shell-command",
+    args: ["--label", "$(whoami)", "a&b", "pipe|value"],
+    options: {
+      cwd: "/games/example",
+      shell: false,
+      env: {
+        KEEP: "yes",
+        HOST: "127.0.0.1",
+        PORT: "43123",
+        BASE_PATH: "/games/example",
       },
     },
-  ]);
+  }]);
 });
 
 test("launchLocalGameProcess treats shell metacharacters literally and runs from the game root", async () => {
   const root = await mkdtemp(join(tmpdir(), "tabletop-nexus-launch-"));
-  const literalArgs = [
-    "semi;colon",
-    "$(substitution)",
-    "a&b",
-    "pipe|value",
-    ">redirect",
-    "%PATH%",
-  ];
+  const literalArgs = ["semi;colon", "$(substitution)", "a&b", "pipe|value", ">redirect", "%PATH%"];
 
   try {
     await writeFile(join(root, "marker.txt"), "cwd-ok", "utf8");
@@ -95,11 +85,8 @@ test("launchLocalGameProcess treats shell metacharacters literally and runs from
       "}));",
     ].join("\n");
 
-    const child = launchLocalGameProcess(
-      installedGame(root, process.execPath, ["-e", script, ...literalArgs]),
-    );
+    const child = launchLocalGameProcess(installedGame(root, process.execPath, ["-e", script, ...literalArgs]));
     const { stdout, stderr } = await collectChild(child);
-
     assert.equal(stderr, "");
     assert.deepEqual(JSON.parse(stdout), {
       cwd: resolve(root),
@@ -114,20 +101,21 @@ test("launchLocalGameProcess treats shell metacharacters literally and runs from
 test("launchLocalGameProcess rejects a malformed argument vector before spawning", () => {
   let called = false;
   const game = installedGame("/games/example", "node", "--version");
-
   assert.throws(
-    () => launchLocalGameProcess(game, { spawn: () => { called = true; } }),
+    () => launchLocalGameProcess(game, { parentEnv: {}, spawn: () => { called = true; } }),
     /runtime\.args must be an array of strings/,
   );
   assert.equal(called, false);
 });
 
-test("launchGameProcess delegates an immutable launch spec to an isolated launcher and preserves an opaque handle", () => {
+test("launchGameProcess delegates an immutable launch spec to an isolated launcher", () => {
   const game = installedGame("/games/example", "node", ["server.js", "--mode", "table"]);
   const opaqueHandle = Object.freeze({ unit: "tabletop-nexus-game@example.service" });
+  const environment = { HOST: "127.0.0.1", PORT: "4444", BASE_PATH: "/games/example" };
   let receivedSpec;
 
   const result = launchGameProcess(game, {
+    environment,
     requireDistinctSecurityBoundary: true,
     launcher: {
       securityBoundary: GAME_LAUNCH_SECURITY_BOUNDARY.DISTINCT_SECURITY_BOUNDARY,
@@ -135,24 +123,27 @@ test("launchGameProcess delegates an immutable launch spec to an isolated launch
         receivedSpec = spec;
         assert.equal(Object.isFrozen(spec), true);
         assert.equal(Object.isFrozen(spec.args), true);
-        assert.throws(() => spec.args.push("--mutated"), TypeError);
+        assert.equal(Object.isFrozen(spec.environment), true);
         return opaqueHandle;
       },
     },
   });
 
+  environment.PORT = "9999";
+  game.manifest.runtime.args.push("--later");
   assert.equal(result, opaqueHandle);
   assert.deepEqual(receivedSpec, {
     command: "node",
     args: ["server.js", "--mode", "table"],
     cwd: "/games/example",
+    environment: { HOST: "127.0.0.1", PORT: "4444", BASE_PATH: "/games/example" },
   });
-  assert.deepEqual(game.manifest.runtime.args, ["server.js", "--mode", "table"]);
 });
 
 test("launchGameProcess fails closed before a same-identity launcher runs when isolation is required", () => {
   let launched = false;
   const launcher = createLocalGameProcessLauncher({
+    parentEnv: {},
     spawn() {
       launched = true;
       return { pid: 1234 };
@@ -171,14 +162,11 @@ test("launchGameProcess fails closed before a same-identity launcher runs when i
 
 test("launchGameProcess rejects an undeclared launcher boundary before launch", () => {
   let launched = false;
-
   assert.throws(
     () => launchGameProcess(installedGame("/games/example", "node", ["server.js"]), {
       launcher: {
         securityBoundary: "probably-isolated",
-        launch() {
-          launched = true;
-        },
+        launch() { launched = true; },
       },
     }),
     /securityBoundary must declare a supported game launch boundary/,

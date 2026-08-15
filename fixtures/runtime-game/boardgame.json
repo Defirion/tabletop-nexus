@@ -1,0 +1,12 @@
+{
+  "schema": 2,
+  "id": "runtime-fixture",
+  "name": "Runtime Fixture",
+  "description": "Original Nexus lifecycle test fixture.",
+  "players": { "min": 1, "max": 4 },
+  "capabilities": { "tvLess": true },
+  "runtime": {
+    "command": "node",
+    "args": ["server.mjs"]
+  }
+}

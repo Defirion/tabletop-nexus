@@ -44,8 +44,10 @@ The automated gate validates both workflow integrity and the current product bas
 - `docs/ai/BASELINE` contains the expected source plus a full 40-character commit SHA;
 - Node.js 22 or newer is available;
 - required product files are present;
-- `node scripts/verify-product.mjs --canonical-target <SHA>` passes, which confirms checkout identity, syntax-checks the server, registry, private-port allocator, process launcher, and portal JavaScript, and runs the Node test suite;
+- `node scripts/verify-product.mjs --canonical-target <SHA>` passes, which confirms checkout identity, syntax-checks the server, registry, private-port allocator, process launcher, readiness client, runtime supervisor, fixture runtime, and portal JavaScript, and runs the Node test suite;
 - the verification checkout remains free of tracked/staged changes.
+
+The R1 test suite includes real loopback fixture-process coverage for launch environment, fixed readiness, lifecycle transitions, startup cleanup, one-active-game switching, unexpected exit, and Linux graceful/forced shutdown behavior. The forced-shutdown runtime test skips on Windows because R1's signal contract is explicitly Linux-specific; the implementation remains syntax/unit checked on every platform and the Linux behavior is exercised when the verifier runs on Linux.
 
 `npm run verify:local` is a developer convenience wrapper that invokes the same shell-free Node product verifier in explicit local mode. The canonical PowerShell verifier invokes Node directly so its product gate does not depend on platform-specific npm command shims. The current product has no package dependencies, so verifier setup does not require `npm install`.
 

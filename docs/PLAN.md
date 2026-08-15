@@ -16,12 +16,12 @@ GitHub PR state is the operational source of truth. Checkboxes describe implemen
 - [x] Allocate private game ports.
 - [x] Spawn manifest-declared game processes without shell interpolation.
 - [x] Keep the launch boundary compatible with the remote-play isolation requirement: supported internet-facing deployment must be able to run games under a security identity/sandbox distinct from Nexus rather than relying on a same-OS-identity child as the only separation from trusted player ingress or administration.
-- [ ] Supply `HOST`, `PORT`, and `BASE_PATH` as environment variables and require the child to bind the assigned private host/port.
-- [ ] Before implementing readiness polling, decide the next contract/schema migration and replace configurable `runtime.healthPath` with the fixed private `GET /__nexus/status` readiness surface, updating `GAME-CONTRACT.md`, manifest validation, and tests atomically rather than redefining schema 1 in place.
-- [ ] Poll the fixed Nexus readiness surface and expose lifecycle state.
-- [ ] Implement graceful `SIGTERM` stop on Linux plus forced-shutdown fallback.
-- [ ] Enforce the initial one-active-game policy: stop the current runtime and release its process/port resources before starting another game runtime.
-- [ ] Add lifecycle tests using a tiny original fixture game.
+- [x] Supply `HOST`, `PORT`, and `BASE_PATH` as environment variables and require the child to bind the assigned private host/port.
+- [x] Migrate the game contract to schema 2 and replace configurable `runtime.healthPath` with the fixed private `GET /__nexus/status` readiness surface, updating `GAME-CONTRACT.md`, manifest validation, and tests atomically rather than redefining schema 1 in place.
+- [x] Poll the fixed Nexus readiness surface and expose lifecycle state.
+- [x] Implement graceful `SIGTERM` stop on Linux plus forced-shutdown fallback.
+- [x] Enforce the initial one-active-game policy: stop the current runtime and release its process/port resources before starting another game runtime.
+- [x] Add lifecycle tests using a tiny original fixture game.
 
 ## R2 — Single-port routing
 
@@ -36,7 +36,7 @@ GitHub PR state is the operational source of truth. Checkboxes describe implemen
 Before adapting the real games, promote the remaining deliberately selected stricter common game shape into the normative contract and implementation together.
 
 - [ ] Decide whether the remaining promoted behavioral requirements require a further contract/schema revision; do not silently redefine an already-supported contract version.
-- [ ] Promote the selected runtime/browser/session requirements recorded in `docs/GAME-AUTHORING-GUIDE.md`, including exact private `HOST` binding, canonical `BASE_PATH=/games/<id>` semantics, same-origin browser behavior, service-worker containment, clean shutdown, server-authoritative shared state, session/recovery expectations where applicable, mandatory TV-less/standalone play, and the canonical optional `BASE_PATH/board/` entrypoint when dedicated-display support is advertised.
+- [ ] Promote the remaining selected runtime/browser/session requirements recorded in `docs/GAME-AUTHORING-GUIDE.md`, including same-origin browser behavior, service-worker containment, clean shutdown compatibility checks, server-authoritative shared state, session/recovery expectations where applicable, mandatory TV-less/standalone play, and the canonical optional `BASE_PATH/board/` entrypoint when dedicated-display support is advertised.
 - [ ] Define the future dedicated-display capability semantics so advertising dedicated-display support means the canonical public board entrypoint exists, while games that do not advertise it have no board-route requirement and every compatible game remains fully playable without that display.
 - [ ] Define the minimal optional Nexus player-presentation handoff: a reusable display name remains distinct from any opaque Nexus browser/profile ID, and neither replaces game-owned room/seat/reconnect identity or authorization.
 - [ ] Add reusable compatibility checks for the promoted integration requirements without teaching Nexus game rules or game-specific payloads.

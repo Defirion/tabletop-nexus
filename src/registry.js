@@ -1,11 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 
+export const CURRENT_GAME_SCHEMA = 2;
 const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const HEALTH_PATH_BASES = [
-  new URL("http://health-check-a.invalid/"),
-  new URL("http://health-check-b.invalid/"),
-];
 
 function assertRecord(value, label) {
   if (value === null || Array.isArray(value) || typeof value !== "object") {
@@ -25,31 +22,11 @@ function assertNonEmptyString(value, label) {
   }
 }
 
-function isLocalAbsoluteHttpPath(value) {
-  if (
-    typeof value !== "string" ||
-    !value.startsWith("/") ||
-    value.includes("?") ||
-    value.includes("#")
-  ) {
-    return false;
-  }
-
-  try {
-    return HEALTH_PATH_BASES.every((base) => {
-      const normalized = new URL(value, base);
-      return normalized.origin === base.origin && !normalized.pathname.startsWith("//");
-    });
-  } catch {
-    return false;
-  }
-}
-
 export function parseManifest(value) {
   assertRecord(value, "manifest");
 
-  if (value.schema !== 1) {
-    throw new Error("manifest.schema must be 1");
+  if (value.schema !== CURRENT_GAME_SCHEMA) {
+    throw new Error(`manifest.schema must be ${CURRENT_GAME_SCHEMA}`);
   }
   if (typeof value.id !== "string" || !ID_PATTERN.test(value.id)) {
     throw new Error("manifest.id must be a lowercase kebab-case identifier");
@@ -80,9 +57,6 @@ export function parseManifest(value) {
   assertNonEmptyString(value.runtime.command, "manifest.runtime.command");
   if (!Array.isArray(value.runtime.args) || value.runtime.args.some((arg) => typeof arg !== "string")) {
     throw new Error("manifest.runtime.args must be an array of strings");
-  }
-  if (!isLocalAbsoluteHttpPath(value.runtime.healthPath)) {
-    throw new Error("manifest.runtime.healthPath must be a local absolute path without query, fragment, or authority");
   }
 
   return value;

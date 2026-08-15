@@ -1,18 +1,20 @@
 # Tabletop Nexus game contract
 
-This document defines the smallest interface a browser game must implement to be discoverable and, in later milestones, launchable by Tabletop Nexus.
+This document defines the smallest interface a browser game must implement to be discoverable and launchable by Tabletop Nexus.
 
 The boundary is runtime integration, not game design: **Nexus knows how to run games; Nexus does not know how games work.**
 
 ## Contract version
 
-Current schema: `1`.
+Current schema: `2`.
+
+Schema 2 replaces schema 1's configurable `runtime.healthPath` with the fixed private Nexus readiness surface `GET /__nexus/status`. Schema 1 is no longer accepted by the current validator; this is an explicit contract migration rather than a silent redefinition of schema 1.
 
 Compatible games expose `boardgame.json` at the game repository root:
 
 ```json
 {
-  "schema": 1,
+  "schema": 2,
   "id": "example-game",
   "name": "Example Game",
   "description": "A short library-card description.",
@@ -24,26 +26,24 @@ Compatible games expose `boardgame.json` at the game repository root:
   },
   "runtime": {
     "command": "node",
-    "args": ["server.js"],
-    "healthPath": "/healthz"
+    "args": ["server.js"]
   }
 }
 ```
 
 ## Required manifest fields
 
-- `schema`: contract schema version. Currently `1`.
+- `schema`: contract schema version. Currently `2`.
 - `id`: stable lowercase identifier using letters, numbers, and single hyphens between segments.
 - `name`: non-empty human-readable title.
 - `players.min` / `players.max`: positive integers with `max >= min`.
 - `capabilities.tvLess`: **must be `true`**.
-- `runtime.command`: non-empty executable name or path that Nexus will launch directly, without a shell.
+- `runtime.command`: non-empty executable name or path that Nexus launches directly, without a shell.
 - `runtime.args`: array of argument strings passed directly to the executable.
-- `runtime.healthPath`: local absolute HTTP path beginning with `/`; query strings, fragments, and protocol-relative paths are not allowed.
 
 `runtime.command` must identify a program the target operating system can execute directly. It is not a command line: shell built-ins, pipelines, redirects, or strings such as `npm run start:nexus` do not belong in this field. Keep every argument in `runtime.args`. Platform command shims that themselves require a shell are not portable Nexus launch targets; use the underlying executable entrypoint instead.
 
-`description`, `personalDevices`, and `dedicatedDisplay` are optional descriptive metadata. Unknown fields are ignored by schema 1 so games may carry their own metadata without widening Nexus's responsibility.
+`description`, `personalDevices`, and `dedicatedDisplay` are optional descriptive metadata. Unknown fields are ignored by schema 2 so games may carry their own metadata without widening Nexus's responsibility. A `runtime.healthPath` field has no Nexus meaning in schema 2; Nexus always polls the fixed readiness surface below.
 
 ## Public versus private metadata
 
@@ -56,15 +56,15 @@ The manifest is server-side runtime configuration. Nexus may expose these fields
 
 Nexus must not expose configured filesystem roots, `runtime.command`, or `runtime.args` through its public API. Runtime details are execution authority, not library-card metadata.
 
-## Runtime environment
+## Runtime environment and private bind
 
-When process supervision is implemented, Nexus will launch the declared command with the game repository as the working directory and provide:
+Nexus launches the declared command with the game repository as the working directory and supplies:
 
-- `HOST`: private bind host selected by Nexus;
-- `PORT`: private port selected by Nexus;
-- `BASE_PATH`: public route assigned to the game, for example `/games/example-game`.
+- `HOST`: Nexus-selected private bind host;
+- `PORT`: Nexus-selected private port;
+- `BASE_PATH`: canonical public route assigned to the game, `/games/<game-id>`, without a trailing slash.
 
-A compatible game must not require a fixed port.
+The runtime must bind its browser-facing listener to the exact supplied `HOST` and `PORT`. It must not widen the bind to `0.0.0.0`, `::`, or another interface in Nexus mode. If the assigned bind cannot be satisfied, startup must fail rather than choosing another address or fixed port.
 
 ### Base-path behavior
 
@@ -74,20 +74,42 @@ Nexus may strip the public game prefix while proxying requests, but the browser-
 
 ## One-process LAN runtime
 
-The launch command must produce one self-contained game runtime from Nexus's perspective: one process boundary and one private HTTP port. The process may use any internal architecture and is responsible for serving its frontend and browser-facing HTTP/WebSocket/SSE endpoints.
+The launch command must produce one self-contained game runtime from Nexus's perspective: one process boundary and one private browser-facing HTTP port. The process may use any internal architecture and is responsible for serving its frontend and browser-facing HTTP/WebSocket/SSE endpoints.
 
 Development servers are not part of the runtime contract.
 
-## Health check
+## Nexus readiness surface
 
-`GET <runtime.healthPath>` must:
+Every schema-2 runtime must expose this private endpoint on the assigned `HOST` and `PORT`:
 
-- return HTTP `200` when the game is ready to receive players;
-- require no authentication or game state;
-- be side-effect free;
-- return promptly.
+```http
+GET /__nexus/status
+```
 
-A JSON body such as `{ "ok": true }` is recommended but not required.
+A well-formed response returns HTTP `200`, `Content-Type: application/json`, and a JSON object using status-payload schema 1:
+
+```json
+{
+  "schema": 1,
+  "ready": true
+}
+```
+
+`ready` has one platform meaning: **Nexus may route players to this runtime.**
+
+Requirements:
+
+- `schema` is the integer status-payload schema version and is currently `1`;
+- `ready` is a required boolean;
+- `ready: false` is a valid response meaning the runtime is alive but not yet player-ready;
+- unknown fields are ignored when the status schema is supported;
+- the endpoint requires no authentication or game state, is side-effect free, and returns promptly.
+
+Timeouts, connection failures, non-`200` responses, non-JSON content, malformed JSON, unsupported status schemas, or missing/invalid required fields are treated as not ready. Nexus never consults a manifest-configured readiness path.
+
+The `__nexus` first path segment is private runtime-management space. R2 reserves that segment case-insensitively after canonicalization so the readiness surface cannot be reached through a public player route.
+
+Games may keep independent diagnostics such as `/healthz` or metrics endpoints; Nexus does not interpret them.
 
 ## TV-less requirement
 
@@ -103,4 +125,6 @@ If Nexus needs game-specific branches to understand those concepts, the integrat
 
 ## Process lifecycle
 
-Games must tolerate normal termination initiated by Nexus. Graceful shutdown on `SIGTERM` or the platform equivalent is strongly recommended. R1 will define startup timeout, health polling, and forced-shutdown behavior without widening this contract.
+Nexus supervises one active game runtime initially. Starting another game stops the current runtime and releases its process/port resources before the replacement is launched.
+
+On Linux, Nexus first requests graceful termination with `SIGTERM`, waits for its configured grace period, and uses `SIGKILL` as the forced fallback if the runtime does not exit. Games should handle `SIGTERM` by closing their listener/helpers and releasing the assigned port promptly. Nexus treats unexpected process exit as a failed lifecycle state and releases the associated port lease after the process is known to have exited.

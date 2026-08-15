@@ -45,12 +45,12 @@ test("server API never exposes configured paths or runtime commands", async (t) 
   await writeFile(
     join(gameRoot, "boardgame.json"),
     JSON.stringify({
-      schema: 1,
+      schema: 2,
       id: "safe-game",
       name: "Safe Game",
       players: { min: 1, max: 2 },
       capabilities: { tvLess: true },
-      runtime: { command: "secret-command", args: ["--secret"], healthPath: "/healthz" },
+      runtime: { command: "secret-command", args: ["--secret"] },
     }),
   );
   const configPath = join(root, "nexus.config.json");
@@ -67,15 +67,13 @@ test("server API never exposes configured paths or runtime commands", async (t) 
   assert.equal(text.includes("secret-command"), false);
   assert.equal(text.includes("--secret"), false);
   assert.deepEqual(JSON.parse(text), {
-    games: [
-      {
-        id: "safe-game",
-        name: "Safe Game",
-        players: { min: 1, max: 2 },
-        capabilities: { tvLess: true },
-        status: "configured",
-      },
-    ],
+    games: [{
+      id: "safe-game",
+      name: "Safe Game",
+      players: { min: 1, max: 2 },
+      capabilities: { tvLess: true },
+      status: "configured",
+    }],
   });
 });
 

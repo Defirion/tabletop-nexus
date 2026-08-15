@@ -6,7 +6,7 @@ The project has one deliberately narrow responsibility:
 
 > **Nexus knows how to run games; Nexus does not know how games work.**
 
-Games remain independent applications and repositories. Tabletop Nexus discovers compatible games through a small manifest contract; later milestones launch, readiness-check, stop, and proxy those runtimes behind one browser-facing portal and port.
+Games remain independent applications and repositories. Tabletop Nexus discovers compatible games through a small manifest contract and now includes the R1 runtime supervisor for launching, readiness-checking, stopping, and switching one active private game runtime. R2 will proxy those runtimes behind the single browser-facing Nexus port.
 
 ## Goals
 
@@ -19,17 +19,17 @@ Games remain independent applications and repositories. Tabletop Nexus discovers
 
 ## Status
 
-**R0 platform baseline.** The schema-1 game contract, local library discovery/validation, browser-safe `/api/games` output, and a minimal portal are implemented. Process supervision (R1) and single-port game routing (R2) are deliberately not part of this baseline.
+**R1 runtime supervisor implemented.** The current schema-2 game contract, local library discovery/validation, browser-safe `/api/games` output, minimal portal, private-port allocation, shell-free launch boundary, fixed readiness polling, lifecycle state, graceful/forced stop, and one-active-game sequencing are implemented. Single-port HTTP/WebSocket/SSE routing remains R2.
 
 See [`docs/PLAN.md`](docs/PLAN.md) for roadmap status and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for current component boundaries.
 
-Planning documents for the intended next-stage architecture are also available:
+Planning documents for later architecture are also available:
 
-- [`docs/GAME-AUTHORING-GUIDE.md`](docs/GAME-AUTHORING-GUIDE.md) — selected stricter game-integration direction for the next contract revision;
+- [`docs/GAME-AUTHORING-GUIDE.md`](docs/GAME-AUTHORING-GUIDE.md) — selected stricter game-integration direction for later contract promotion;
 - [`docs/DEPLOYMENT-MODEL.md`](docs/DEPLOYMENT-MODEL.md) — ordinary-Linux-host and one-active-game deployment assumptions;
 - [`docs/REMOTE-PLAY.md`](docs/REMOTE-PLAY.md) — proposed friends-only internet exposure, security model, and support gate.
 
-Those planning documents do not claim their future requirements are already implemented; [`GAME-CONTRACT.md`](GAME-CONTRACT.md) remains the current normative compatibility contract.
+[`GAME-CONTRACT.md`](GAME-CONTRACT.md) remains the current normative compatibility contract.
 
 ## Architecture
 
@@ -42,14 +42,14 @@ Tabletop Nexus :3000
     |-- /api/games            configured game metadata
     |-- /games/<game-id>/...  reverse proxy (planned R2)
     |
-    +-- selected private game process (planned R1; one active initially)
+    +-- R1 supervisor -> one selected private game runtime
 ```
 
 Compatible games use the integration boundary in [`GAME-CONTRACT.md`](GAME-CONTRACT.md).
 
 ## Local development
 
-Requires Node.js 22 or newer. R0 has no package dependencies.
+Requires Node.js 22 or newer. The project currently has no package dependencies.
 
 ```bash
 cp nexus.config.example.json nexus.config.json
@@ -67,7 +67,7 @@ The default Nexus address is `http://localhost:3000`. `HOST`, `PORT`, and `NEXUS
 
 ## Adding a game locally
 
-A compatible game keeps `boardgame.json` at its repository root. Add that repository path to local `nexus.config.json`:
+A compatible schema-2 game keeps `boardgame.json` at its repository root. Add that repository path to local `nexus.config.json`:
 
 ```json
 {

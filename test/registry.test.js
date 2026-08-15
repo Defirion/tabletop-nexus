@@ -3,20 +3,16 @@ import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { loadLibrary, parseManifest, toPublicGame } from "../src/registry.js";
+import { CURRENT_GAME_SCHEMA, loadLibrary, parseManifest, toPublicGame } from "../src/registry.js";
 
 const validManifest = Object.freeze({
-  schema: 1,
+  schema: 2,
   id: "fixture-game",
   name: "Fixture Game",
   description: "Original test fixture.",
   players: { min: 2, max: 4 },
   capabilities: { tvLess: true, personalDevices: true },
-  runtime: {
-    command: "node",
-    args: ["server.js"],
-    healthPath: "/healthz",
-  },
+  runtime: { command: "node", args: ["server.js"] },
 });
 
 function cloneManifest(overrides = {}) {
@@ -29,43 +25,34 @@ function cloneManifest(overrides = {}) {
   };
 }
 
-function manifestWithHealthPath(healthPath) {
-  return cloneManifest({ runtime: { command: "node", args: [], healthPath } });
-}
+test("parseManifest accepts schema 2 without a configurable readiness path", () => {
+  const manifest = parseManifest(cloneManifest());
+  assert.equal(CURRENT_GAME_SCHEMA, 2);
+  assert.equal(manifest.id, "fixture-game");
+  assert.equal("healthPath" in manifest.runtime, false);
+});
 
-test("parseManifest accepts the schema-1 baseline", () => {
-  assert.equal(parseManifest(cloneManifest()).id, "fixture-game");
-  assert.equal(parseManifest(manifestWithHealthPath("/healthz")).runtime.healthPath, "/healthz");
+test("parseManifest rejects the former schema-1 contract instead of redefining it", () => {
+  const oldManifest = cloneManifest({
+    schema: 1,
+    runtime: { command: "node", args: ["server.js"], healthPath: "/healthz" },
+  });
+  assert.throws(() => parseManifest(oldManifest), /manifest\.schema must be 2/);
+});
+
+test("parseManifest ignores a legacy-looking runtime.healthPath field under schema 2 because readiness is fixed by contract", () => {
+  const manifest = parseManifest(cloneManifest({
+    runtime: { command: "node", args: ["server.js"], healthPath: "/not-used" },
+  }));
+  assert.equal(manifest.runtime.healthPath, "/not-used");
 });
 
 test("parseManifest rejects missing TV-less support", () => {
-  assert.throws(
-    () => parseManifest(cloneManifest({ capabilities: { tvLess: false } })),
-    /tvLess must be true/,
-  );
+  assert.throws(() => parseManifest(cloneManifest({ capabilities: { tvLess: false } })), /tvLess must be true/);
 });
 
 test("parseManifest rejects invalid player ranges", () => {
   assert.throws(() => parseManifest(cloneManifest({ players: { min: 4, max: 2 } })), /max must be >=/);
-});
-
-test("parseManifest rejects explicit non-local health URL forms", () => {
-  for (const healthPath of ["healthz", "//other-host/healthz", "/healthz?ready=1", "/healthz#ready"]) {
-    assert.throws(() => parseManifest(manifestWithHealthPath(healthPath)), /local absolute path/);
-  }
-});
-
-test("parseManifest rejects health paths that normalize into authority or network-path forms", () => {
-  for (const healthPath of [
-    "/\\evil/healthz",
-    "/\t/evil/healthz",
-    "/\n/evil/healthz",
-    "/../\\evil/healthz",
-    "/%2e%2e/\\evil/healthz",
-    "/\\health-check-a.invalid/healthz",
-  ]) {
-    assert.throws(() => parseManifest(manifestWithHealthPath(healthPath)), /local absolute path/);
-  }
 });
 
 test("loadLibrary treats a missing local config as an empty library", async () => {
@@ -82,9 +69,7 @@ test("loadLibrary resolves game paths relative to config and exposes only safe m
 
   const [game] = await loadLibrary(join(root, "nexus.config.json"));
   assert.equal(game.root, gameRoot);
-
-  const publicGame = toPublicGame(game);
-  assert.deepEqual(publicGame, {
+  assert.deepEqual(toPublicGame(game), {
     id: "fixture-game",
     name: "Fixture Game",
     description: "Original test fixture.",
@@ -92,9 +77,7 @@ test("loadLibrary resolves game paths relative to config and exposes only safe m
     capabilities: { tvLess: true, personalDevices: true },
     status: "configured",
   });
-  assert.equal("root" in publicGame, false);
-  assert.equal("runtime" in publicGame, false);
-  assert.equal(JSON.stringify(publicGame).includes("server.js"), false);
+  assert.equal(JSON.stringify(toPublicGame(game)).includes("server.js"), false);
 });
 
 test("loadLibrary rejects duplicate public identities", async () => {
@@ -104,11 +87,7 @@ test("loadLibrary rejects duplicate public identities", async () => {
     await mkdir(gameRoot);
     await writeFile(join(gameRoot, "boardgame.json"), JSON.stringify(cloneManifest()));
   }
-  await writeFile(
-    join(root, "nexus.config.json"),
-    JSON.stringify({ games: [{ path: "./one" }, { path: "./two" }] }),
-  );
-
+  await writeFile(join(root, "nexus.config.json"), JSON.stringify({ games: [{ path: "./one" }, { path: "./two" }] }));
   await assert.rejects(() => loadLibrary(join(root, "nexus.config.json")), /duplicate game id: fixture-game/);
 });
 
@@ -117,7 +96,6 @@ test("loadLibrary distinguishes absent config from malformed or incomplete confi
   const malformed = join(root, "malformed.json");
   await writeFile(malformed, "{");
   await assert.rejects(() => loadLibrary(malformed), /config contains invalid JSON/);
-
   const config = join(root, "nexus.config.json");
   await writeFile(config, JSON.stringify({ games: [{ path: "./missing-game" }] }));
   await assert.rejects(() => loadLibrary(config), /manifest not found/);
