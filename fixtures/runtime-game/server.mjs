@@ -36,6 +36,22 @@ const server = createServer((request, response) => {
       response.end(JSON.stringify({ schema: 1, ready: true }));
       return;
     }
+    if (statusMode === "trickle") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.write("{");
+      let ticks = 0;
+      const interval = setInterval(() => {
+        ticks += 1;
+        if (ticks >= 100) {
+          clearInterval(interval);
+          response.end("}");
+          return;
+        }
+        response.write(" ");
+      }, 10);
+      response.once("close", () => clearInterval(interval));
+      return;
+    }
     response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
     response.end(JSON.stringify({ schema: 1, ready: Date.now() >= readyAt }));
     return;
