@@ -156,10 +156,16 @@ export class RuntimeSupervisor {
         exitPromise,
         basePath,
         status: GAME_LIFECYCLE_STATUS.STARTING,
-        expectedStop: false,
         released: false,
       };
       this.#active = record;
+
+      // Install definitive-exit cleanup immediately, not only after readiness.
+      // If startup/stop cleanup fails but the process exits later, the retained
+      // lease is released only at that confirmed termination point.
+      exitPromise.then((exit) => {
+        this.#enqueue(() => this.#handleDefinitiveExit(record, exit));
+      });
 
       await waitForNexusReadiness({
         host: lease.host,
@@ -175,15 +181,11 @@ export class RuntimeSupervisor {
       }
 
       this.#setState(gameId, GAME_LIFECYCLE_STATUS.RUNNING);
-      exitPromise.then((exit) => {
-        this.#enqueue(() => this.#handleUnexpectedExit(record, exit));
-      });
       return this.getState(gameId);
     } catch (error) {
       if (record !== undefined) {
         const alreadyExited = error?.code === "GAME_EXITED_BEFORE_READY";
         if (!alreadyExited) {
-          record.expectedStop = true;
           try {
             await record.execution.stop({ gracePeriodMs: this.#stopGracePeriodMs });
           } catch (stopError) {
@@ -208,7 +210,6 @@ export class RuntimeSupervisor {
       return null;
     }
 
-    record.expectedStop = true;
     this.#setState(record.gameId, GAME_LIFECYCLE_STATUS.STOPPING);
 
     let stopResult;
@@ -240,12 +241,20 @@ export class RuntimeSupervisor {
     }
   }
 
-  #handleUnexpectedExit(record, exit) {
-    if (record.expectedStop || this.#active !== record) {
+  #handleDefinitiveExit(record, exit) {
+    if (this.#active !== record) {
       return;
     }
 
+    const priorState = this.#states.get(record.gameId);
     this.#releaseRecord(record);
+    if (priorState?.status === GAME_LIFECYCLE_STATUS.FAILED) {
+      this.#setState(record.gameId, GAME_LIFECYCLE_STATUS.FAILED, {
+        error: priorState.error,
+      });
+      return;
+    }
+
     const detail = exit.error
       ? messageFor(exit.error)
       : `code ${exit.code ?? "null"}, signal ${exit.signal ?? "none"}`;
