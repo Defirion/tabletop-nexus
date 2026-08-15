@@ -50,7 +50,7 @@ function nextTurn() {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
-test("launchLocalGameProcess keeps executable, arguments, environment, and shell boundary separate", () => {
+test("launchLocalGameProcess keeps executable, arguments, environment, shell boundary, and caller-owned output separate", () => {
   const calls = [];
   const child = Object.assign(new EventEmitter(), { pid: 1234, exitCode: null, signalCode: null });
   const game = installedGame(
@@ -81,6 +81,7 @@ test("launchLocalGameProcess keeps executable, arguments, environment, and shell
         PORT: "43123",
         BASE_PATH: "/games/example",
       },
+      stdio: ["ignore", "pipe", "pipe"],
     },
   }]);
 });
@@ -121,6 +122,26 @@ test("launchLocalGameProcess rejects a malformed argument vector before spawning
     /runtime\.args must be an array of strings/,
   );
   assert.equal(called, false);
+});
+
+test("local supervised launcher explicitly discards stdio so hidden pipes cannot backpressure", () => {
+  const calls = [];
+  const child = fakeChild();
+  const launcher = createLocalGameProcessLauncher({
+    parentEnv: {},
+    spawn(command, args, options) {
+      calls.push({ command, args, options });
+      return child;
+    },
+  });
+
+  const result = launchGameProcess(installedGame("/games/example", "node", ["server.js"]), {
+    launcher,
+    environment: { HOST: "127.0.0.1", PORT: "43123", BASE_PATH: "/games/example" },
+  });
+
+  assert.equal(result, child);
+  assert.deepEqual(calls[0].options.stdio, ["ignore", "ignore", "ignore"]);
 });
 
 test("launchGameProcess delegates an immutable launch spec to an isolated launcher", () => {
