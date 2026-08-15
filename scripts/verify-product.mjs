@@ -41,6 +41,7 @@ if (verification.mode === "canonical") {
 const checks = [
   ["--check", "src/registry.js"],
   ["--check", "src/runtime/private-ports.js"],
+  ["--check", "src/runtime/process-launcher.js"],
   ["--check", "src/server.js"],
   ["--check", "public/app.js"],
   ["--test"],
