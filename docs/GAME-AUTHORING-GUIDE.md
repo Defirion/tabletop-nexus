@@ -44,7 +44,7 @@ A future Nexus-compatible game should be required to provide this common shape:
 
 - one Nexus-supervised production runtime;
 - one Nexus-assigned private browser-facing port;
-- `HOST`, `PORT`, and `BASE_PATH` supplied by Nexus as environment variables;
+- `HOST`, `PORT`, `BASE_PATH`, and the private per-launch `NEXUS_LAUNCH_TOKEN` supplied by Nexus as environment variables;
 - the runtime binds its listener to the exact supplied `HOST` rather than widening to `0.0.0.0`, `::`, or another interface;
 - `BASE_PATH` uses the canonical no-trailing-slash form `/games/<game-id>`;
 - the normal player landing page is available publicly at `BASE_PATH/`;
@@ -53,7 +53,7 @@ A future Nexus-compatible game should be required to provide this common shape:
 - production frontend content is served by that same supervised runtime rather than a separate development server;
 - all required browser-facing URLs, APIs, WebSockets/SSE, redirects, and generated links work on the public Nexus origin beneath `BASE_PATH` rather than constructing direct LAN/private-port URLs;
 - any game service worker is scoped so it cannot control the Nexus portal or sibling game paths;
-- a fixed private Nexus readiness endpoint at `GET /__nexus/status`;
+- a fixed private Nexus readiness endpoint at `GET /__nexus/status` that echoes the launch token supplied to that runtime;
 - clean shutdown on the Nexus graceful-termination signal, including listener/helper cleanup and full assigned-port release;
 - complete standalone/TV-less play without a mandatory dedicated display; this is the default compatibility baseline;
 - when a game advertises dedicated-display support, a canonical optional shared-board entrypoint is available publicly at `BASE_PATH/board/` from the same runtime/port;
@@ -97,11 +97,11 @@ The baseline game contract also does **not** promise games a trustworthy public 
 
 ## Current implemented seam and migration gates
 
-`GAME-CONTRACT.md` and `src/registry.js` now define/enforce schema 2. R1 explicitly retired schema 1 instead of redefining it in place: schema 2 removes configurable `runtime.healthPath`, requires the Nexus launch environment/private bind behavior, and uses the fixed private `GET /__nexus/status` readiness surface. The runtime supervisor implements that launch/readiness/lifecycle seam and the one-active-game policy.
+`GAME-CONTRACT.md` and `src/registry.js` now define/enforce manifest schema 2. R1 explicitly retired manifest schema 1 instead of redefining it in place: schema 2 removes configurable `runtime.healthPath`, requires the Nexus launch environment/private bind behavior, and uses the fixed private `GET /__nexus/status` readiness surface. Readiness payload schema 2 additionally requires the per-launch association token so a valid-looking process that wins the probe-to-bind race cannot be mistaken for the runtime Nexus launched. The runtime supervisor implements that launch/readiness/lifecycle seam and the one-active-game policy.
 
 `capabilities.dedicatedDisplay` remains descriptive metadata only. Schema 2 does **not** currently require `BASE_PATH/board/`, nor does it yet promote the remaining browser/session/shared-state requirements in this guide. Those remaining requirements belong in the pre-R3 contract gate with any further schema decision, validator changes, and reusable compatibility tests. `docs/PLAN.md` records that gate.
 
-Games migrating from schema 1 must update their manifest to `schema: 2`, remove any dependency on Nexus consulting `runtime.healthPath`, consume the Nexus-provided launch environment, bind the assigned private endpoint, and implement `GET /__nexus/status` as documented below.
+Games migrating from manifest schema 1 must update their manifest to `schema: 2`, remove any dependency on Nexus consulting `runtime.healthPath`, consume the Nexus-provided launch environment, bind the assigned private endpoint, and implement `GET /__nexus/status` with readiness payload schema 2 as documented below.
 
 ## Launch environment and private bind
 
@@ -111,6 +111,7 @@ Nexus launches the manifest-declared runtime command and supplies these environm
 HOST=<Nexus-selected private bind host>
 PORT=<Nexus-selected private port>
 BASE_PATH=/games/<game-id>
+NEXUS_LAUNCH_TOKEN=<opaque unpredictable per-launch value>
 ```
 
 `BASE_PATH` is supplied without a trailing slash. The public player entrypoint is the corresponding path with `/` appended, for example:
@@ -120,6 +121,8 @@ https://games.example.com/games/captain-flip/
 ```
 
 The runtime must bind to the exact supplied `HOST` and `PORT`. It must not replace the supplied host with a wildcard bind such as `0.0.0.0` or `::` in Nexus production mode. If the assigned bind cannot be satisfied, startup should fail rather than widening exposure.
+
+`NEXUS_LAUNCH_TOKEN` exists only to associate the private readiness response with the specific runtime Nexus launched. The game does not generate or interpret it and must not use it as room/player identity or game authorization. Echo the exact value only in the private readiness payload. Nexus deliberately does not send the expected value in the readiness request, so a different process that happens to own the assigned port cannot satisfy the association by reflecting request data.
 
 Development or standalone modes may use different convenient defaults; those defaults are not the Nexus production contract.
 
@@ -164,8 +167,9 @@ with at least:
 
 ```json
 {
-  "schema": 1,
-  "ready": true
+  "schema": 2,
+  "ready": true,
+  "launchToken": "<exact NEXUS_LAUNCH_TOKEN value>"
 }
 ```
 
@@ -179,24 +183,26 @@ The endpoint is private to the Nexus-to-game runtime seam. It is queried directl
 
 The reservation is a whole-segment rule, not a textual prefix rule: near names such as `/__nexusx/...` or `/__nexus-status/...` remain game-owned ordinary paths if the game chooses to define them.
 
-For the initial status schema:
+For the current status schema:
 
 - a well-formed status response returns HTTP `200` with a JSON object and `Content-Type: application/json`, whether `ready` is `true` or `false`;
-- `schema` is the integer status-payload schema version and begins at `1`;
+- `schema` is the integer status-payload schema version and is currently `2`; payload schema 1 is not accepted because it did not associate readiness with the launched runtime;
 - `ready` is a required boolean;
+- `launchToken` is required and exactly echoes the `NEXUS_LAUNCH_TOKEN` from that runtime's environment;
+- Nexus does not send the expected launch token in the request;
 - readers ignore unknown fields when the declared status schema is supported, allowing optional fields to be added compatibly;
-- timeout, connection failure, non-`200`, malformed JSON, missing/invalid required fields, or an unsupported status schema are treated as **not ready** and surfaced through Nexus lifecycle/startup handling rather than routed to players.
+- a missing/mismatched launch token, timeout, connection failure, non-`200`, malformed JSON, missing/invalid required fields, or an unsupported status schema is treated as **not ready** and surfaced through Nexus lifecycle/startup handling rather than routed to players.
 
 Conceptually:
 
 ```text
-process unreachable / invalid status
+process unreachable / invalid status / wrong launch token
     -> runtime unavailable or startup failure
 
-/__nexus/status valid, ready=false
+/__nexus/status valid for this launch, ready=false
     -> starting / not ready
 
-/__nexus/status valid, ready=true
+/__nexus/status valid for this launch, ready=true
     -> running / ready for players
 ```
 
@@ -432,7 +438,7 @@ Pirate Island is already close to the selected production shape:
 - `/healthz` for its own health semantics;
 - `HOST` and `PORT` already supported.
 
-Its main Nexus adaptation remains exact `BASE_PATH`/same-origin URL behavior plus the schema-2 fixed private `/__nexus/status` readiness surface and exact supplied-host binding. Its HTTP/SSE room model does not need to be rewritten. It does not need to invent a dedicated board view unless it chooses to advertise that optional capability.
+Its main Nexus adaptation remains exact `BASE_PATH`/same-origin URL behavior plus the schema-2 fixed private `/__nexus/status` readiness surface, exact `NEXUS_LAUNCH_TOKEN` echo, and exact supplied-host binding. Its HTTP/SSE room model does not need to be rewritten. It does not need to invent a dedicated board view unless it chooses to advertise that optional capability.
 
 ### Captain Flip / Flippin Stories
 
@@ -499,12 +505,12 @@ When planning or adapting a Nexus game, answer these questions in that game's ow
 
 - What command will Nexus launch?
 - Can production run as one supervised process/port?
-- Does it read `HOST`, `PORT`, and `BASE_PATH` from the Nexus-provided environment?
+- Does it read `HOST`, `PORT`, `BASE_PATH`, and `NEXUS_LAUNCH_TOKEN` from the Nexus-provided environment?
 - Does it bind exactly to the supplied `HOST`/`PORT` rather than a wildcard interface?
 - Does it treat `BASE_PATH` as `/games/<id>` without a trailing slash and generate the public landing path as `BASE_PATH/`?
 - Are private runtime routes correct after Nexus strips `BASE_PATH` before proxying?
 - Does the game keep player routes out of every ASCII case alias of the reserved `__nexus` first path segment?
-- Does `GET /__nexus/status` report Nexus readiness with the agreed status-schema and failure semantics?
+- Does `GET /__nexus/status` report Nexus readiness with status-payload schema 2 and exactly echo the launch token without relying on request reflection?
 - If the runtime serves files from disk, is exposure restricted to an explicit public build/static root rather than repository/server files?
 - Does all required browser traffic return to the Nexus origin beneath `BASE_PATH`?
 - If a service worker exists, is its scope contained beneath `BASE_PATH`?
@@ -528,9 +534,10 @@ When planning or adapting a Nexus game, answer these questions in that game's ow
 
 A reusable Nexus compatibility harness should eventually establish at least:
 
-- startup with non-default `HOST`, `PORT`, and `BASE_PATH` environment values;
+- startup with non-default `HOST`, `PORT`, `BASE_PATH`, and `NEXUS_LAUNCH_TOKEN` environment values;
 - binding to the assigned private `HOST`/`PORT` rather than widening exposure;
-- fixed private `/__nexus/status` readiness behavior, including valid `ready=false` and invalid/unavailable status handling;
+- fixed private `/__nexus/status` readiness behavior, including valid `ready=false`, exact per-launch token echo, token-mismatch rejection, and invalid/unavailable status handling;
+- a probe-to-bind race control where an otherwise valid responder occupies the assigned port with the wrong launch token and is never accepted as the launched runtime;
 - public rejection of lowercase `/games/<id>/__nexus/status`, direct ASCII mixed-case aliases such as `/games/<id>/__NEXUS/status` and `/games/<id>/__Nexus/status`, and encoded/canonicalization variants that resolve to any ASCII case alias of the reserved first segment;
 - unchanged successful routing for ordinary game paths and near-name controls such as `/games/<id>/__nexusx/status` and `/games/<id>/__nexus-status`, proving the reservation is a whole-segment rule rather than an overbroad prefix block;
 - direct private Nexus polling of canonical `GET /__nexus/status` on the assigned private host/port as a positive control;
