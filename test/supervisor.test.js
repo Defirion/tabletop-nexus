@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn as nodeSpawn } from "node:child_process";
+import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -105,6 +106,60 @@ function createFirstProcessSignalFailureLauncher() {
   };
 }
 
+async function createRacingReadinessAllocator(responderLaunchToken) {
+  let statusRequests = 0;
+  let released = false;
+  const server = createHttpServer((request, response) => {
+    if (request.url !== "/__nexus/status") {
+      response.writeHead(404);
+      response.end();
+      return;
+    }
+
+    statusRequests += 1;
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({
+      schema: 2,
+      ready: true,
+      launchToken: responderLaunchToken,
+    }));
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen({ host: "127.0.0.1", port: 0, exclusive: true }, resolve);
+  });
+  const { port } = server.address();
+
+  return {
+    allocator: {
+      async allocate() {
+        return Object.freeze({
+          host: "127.0.0.1",
+          port,
+          release() {
+            if (released) {
+              return false;
+            }
+            released = true;
+            return true;
+          },
+        });
+      },
+    },
+    get statusRequests() {
+      return statusRequests;
+    },
+    get released() {
+      return released;
+    },
+    async close() {
+      if (server.listening) {
+        await new Promise((resolve) => server.close(resolve));
+      }
+    },
+  };
+}
+
 async function waitUntil(predicate, timeoutMs = 2_000) {
   const deadline = Date.now() + timeoutMs;
   while (!predicate() && Date.now() < deadline) {
@@ -129,6 +184,7 @@ test("RuntimeSupervisor supplies canonical launch environment and reaches runnin
   assert.equal(active.host, "127.0.0.1");
   assert.equal(active.basePath, "/games/fixture-one");
   assert.equal(active.status, "running");
+  assert.equal(Object.hasOwn(active, "launchToken"), false);
 
   const response = await fetch(`http://${active.host}:${active.port}/fixture`);
   assert.equal(response.status, 200);
@@ -144,6 +200,60 @@ test("RuntimeSupervisor supplies canonical launch environment and reaches runnin
     forced: false,
   });
   assert.equal(supervisor.getActiveRuntime(), null);
+});
+
+test("RuntimeSupervisor releases the allocated lease if launch-token creation fails before process launch", async () => {
+  const recording = createRecordingAllocator();
+  let launched = false;
+  const supervisor = new RuntimeSupervisor({
+    allocator: recording.allocator,
+    launcher: {
+      securityBoundary: "same-os-identity",
+      launch() {
+        launched = true;
+      },
+      waitForExit() {},
+      stop() {},
+    },
+    launchTokenFactory: () => "",
+  });
+
+  await assert.rejects(
+    () => supervisor.start(fixtureGame("bad-launch-token")),
+    /launchTokenFactory must return a non-empty string/,
+  );
+  assert.equal(launched, false);
+  assert.equal(recording.allocations.length, 1);
+  assert.equal(recording.allocations[0].released, true);
+  assert.equal(supervisor.getActiveRuntime(), null);
+  assert.equal(supervisor.getState("bad-launch-token").status, "failed");
+});
+
+test("RuntimeSupervisor never accepts a valid-looking readiness responder that won the assigned port before the intended child", async () => {
+  const expectedLaunchToken = "expected-launch-token";
+  const racing = await createRacingReadinessAllocator("different-launch-token");
+  const supervisor = new RuntimeSupervisor({
+    allocator: racing.allocator,
+    launchTokenFactory: () => expectedLaunchToken,
+    startupTimeoutMs: 1_000,
+    pollIntervalMs: 20,
+    requestTimeoutMs: 100,
+    stopGracePeriodMs: 200,
+  });
+
+  try {
+    await assert.rejects(
+      () => supervisor.start(fixtureGame("port-race", ["--bind-delay-ms=120"])),
+      /exited before becoming ready/,
+    );
+    assert.ok(racing.statusRequests > 0, "expected Nexus to observe the racing responder");
+    assert.equal(racing.released, true);
+    assert.equal(supervisor.getState("port-race").status, "failed");
+    assert.equal(supervisor.getActiveRuntime(), null);
+  } finally {
+    await supervisor.stop().catch(() => undefined);
+    await racing.close();
+  }
 });
 
 test("RuntimeSupervisor fails closed on invalid readiness and releases startup resources", async () => {
@@ -367,6 +477,28 @@ test("RuntimeSupervisor enforces the absolute startup deadline against trickling
       recording.events.indexOf("release:1:true") < recording.events.indexOf("allocate:2"),
       `expected failed startup cleanup before queued allocation, got ${recording.events.join(", ")}`,
     );
+  } finally {
+    await supervisor.stop();
+  }
+});
+
+test("RuntimeSupervisor remains live when a supervised game emits output beyond pipe capacity before readiness", async () => {
+  const supervisor = new RuntimeSupervisor({
+    startupTimeoutMs: 3_000,
+    pollIntervalMs: 20,
+    requestTimeoutMs: 100,
+    stopGracePeriodMs: 300,
+  });
+
+  try {
+    assert.deepEqual(
+      await supervisor.start(fixtureGame("noisy-runtime", ["--output-bytes=2097152"])),
+      { gameId: "noisy-runtime", status: "running" },
+    );
+
+    const active = supervisor.getActiveRuntime();
+    const response = await fetch(`http://${active.host}:${active.port}/fixture`);
+    assert.equal(response.status, 200);
   } finally {
     await supervisor.stop();
   }
