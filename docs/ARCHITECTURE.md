@@ -57,7 +57,7 @@ The current schema-1 contract still uses configurable `runtime.healthPath`. Befo
 
 Routes HTTP and upgrade/WebSocket traffic from `/games/<id>/...` to the correct private game process. It must remain transport-agnostic and must not inspect game payloads.
 
-The private runtime-management namespace is a deliberate exception to prefix forwarding: after path canonicalization and `/games/<id>` removal, a target equal to `/__nexus` or beneath `/__nexus/` is never player-proxyable. Nexus uses that reserved namespace only across the private Nexus-to-game management seam, including `GET /__nexus/status`.
+The private runtime-management namespace is a deliberate exception to prefix forwarding. After the same path canonicalization used for security decisions and removal of `/games/<id>`, Nexus treats a first path segment that equals ASCII `__nexus` **case-insensitively** as reserved. Therefore `/__nexus`, `/__NEXUS`, `/__Nexus`, and any encoded form that canonicalizes to one of those case aliases are never player-proxyable, whether the target is the segment itself or anything beneath it. Nexus uses the canonical lowercase namespace only across the private Nexus-to-game management seam, including `GET /__nexus/status`.
 
 ## Security model
 
@@ -68,7 +68,7 @@ The current implementation target is a trusted home LAN, not hostile multi-tenan
 - manifests are local trusted configuration, not remotely supplied launch instructions;
 - future process spawning must use executable + argument arrays without shell interpolation;
 - invalid or unregistered public game routes must be rejected;
-- the reserved private game-management namespace must never be forwarded from a player route.
+- the reserved private game-management first path segment must never be forwarded from a player route under any ASCII case alias after canonicalization.
 
 Friends-only internet exposure is planned separately in [`REMOTE-PLAY.md`](REMOTE-PLAY.md). That design deliberately keeps players unauthenticated initially, adds a stronger public-ingress threat model and private admin boundary, and is not considered supported until its documented acceptance gate passes.
 
