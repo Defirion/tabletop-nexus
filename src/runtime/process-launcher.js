@@ -74,19 +74,57 @@ function assertGracePeriod(gracePeriodMs) {
   }
 }
 
+function childHasExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+function createSignalDeliveryError(signal, cause) {
+  const detail = cause instanceof Error ? `: ${cause.message}` : "";
+  const error = new Error(
+    `failed to deliver ${signal} to game process${detail}`,
+    cause === undefined ? undefined : { cause },
+  );
+  error.code = "GAME_SIGNAL_DELIVERY_FAILED";
+  error.signal = signal;
+  return error;
+}
+
+function sendSignal(child, signal) {
+  try {
+    if (child.kill(signal)) {
+      return true;
+    }
+  } catch (error) {
+    if (childHasExited(child)) {
+      return false;
+    }
+    throw createSignalDeliveryError(signal, error);
+  }
+
+  if (childHasExited(child)) {
+    return false;
+  }
+  throw createSignalDeliveryError(signal);
+}
+
 function trackChildExit(child) {
   return new Promise((resolve) => {
-    let settled = false;
-    const settle = (result) => {
-      if (settled) {
-        return;
+    let spawnError = null;
+    const onError = (error) => {
+      // ChildProcess 'error' also covers failed kill/message operations after a
+      // successful spawn. Those are lifecycle errors, not proof of termination.
+      // A missing pid is the Node-documented spawn-failure case; 'close' still
+      // follows and is the definitive point at which no child can remain alive.
+      if (child.pid === undefined && spawnError === null) {
+        spawnError = error;
       }
-      settled = true;
-      resolve(Object.freeze(result));
     };
 
-    child.once("error", (error) => settle({ code: null, signal: null, error }));
-    child.once("close", (code, signal) => settle({ code, signal, error: null }));
+    child.on("error", onError);
+    child.once("close", (code, signal) => {
+      child.off("error", onError);
+      resolve(Object.freeze({ code, signal, error: spawnError }));
+    });
   });
 }
 
@@ -133,11 +171,15 @@ export function createLocalGameProcessLauncher({
         throw new TypeError("unknown local game process handle");
       }
 
-      if (child.exitCode !== null || child.signalCode !== null) {
+      if (childHasExited(child)) {
         return Object.freeze({ ...(await exit), forced: false });
       }
 
-      child.kill("SIGTERM");
+      const gracefulSignalDelivered = sendSignal(child, "SIGTERM");
+      if (!gracefulSignalDelivered) {
+        return Object.freeze({ ...(await exit), forced: false });
+      }
+
       let timeoutId;
       const gracefulTimeout = new Promise((resolve) => {
         timeoutId = setTimeoutFn(() => resolve(null), gracePeriodMs);
@@ -148,7 +190,10 @@ export function createLocalGameProcessLauncher({
         return Object.freeze({ ...gracefulExit, forced: false });
       }
 
-      child.kill("SIGKILL");
+      const forcedSignalDelivered = sendSignal(child, "SIGKILL");
+      if (!forcedSignalDelivered) {
+        return Object.freeze({ ...(await exit), forced: false });
+      }
       return Object.freeze({ ...(await exit), forced: true });
     },
   });
