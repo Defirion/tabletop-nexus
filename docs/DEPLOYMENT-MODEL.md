@@ -16,6 +16,7 @@ The initial remote-play operating model assumes:
 - Nexus launches and supervises game processes;
 - game processes bind to Nexus-selected private ports;
 - supported remote play runs game code under a security identity/sandbox that is distinct from Nexus and cannot reach Nexus control-plane listeners merely because it is local to the VM;
+- on a supported cloud profile, that game execution context also cannot obtain usable provider/host credentials or sensitive control data from metadata, workload-identity, or equivalent local credential endpoints;
 - **one game runtime is active at a time** for the initial supported deployment profile;
 - the host/VM has enough headroom for the operating system, ingress/control services, Nexus, and that one game.
 
@@ -89,6 +90,8 @@ sufficient CPU/RAM for Nexus + one game
 
 Supported remote play additionally requires the host to be able to launch/supervise the game under a distinct security identity or equivalent sandbox and to enforce host-local access controls that keep the game away from Nexus player-ingress and admin control surfaces.
 
+For a supported cloud-hosted profile, those host capabilities must also let the deployment prevent the game-runtime context from obtaining usable provider/host credentials or sensitive control data through metadata, workload-identity, or equivalent local credential surfaces. The required property is provider-independent; the concrete mechanism belongs to the deployment profile.
+
 Remote play may additionally use Tailscale and Cloudflare Tunnel, but Nexus games should not know which cloud/provider supplies the VM.
 
 Avoid provider-specific dependencies such as:
@@ -153,6 +156,8 @@ Linux VM
 
 The cloud VM replaces the home VM but should not change the game integration seam.
 
+Cloud hosting adds one deployment-local trust surface that a home profile may not have: provider metadata, attached service/workload identity, instance bootstrap/user-data, or equivalent host-local credential/control endpoints. A cloud profile is not supported merely because the game has a different Unix identity; the game execution context must also be unable to turn those local services into usable authority or sensitive control data outside the intended game-runtime boundary.
+
 ## Network assumptions
 
 The intended remote architecture remains:
@@ -172,6 +177,8 @@ private game port
 Administration remains a separate private path through Tailscale.
 
 No deployment profile should require exposing game ports directly to the internet or router port-forwarding to Nexus/game processes.
+
+Ordinary public-internet egress, when allowed, does **not** imply access to provider/host-local credential services. A supported cloud profile must separately account for metadata/workload-identity endpoints and equivalent local agents or sockets reachable from the game context.
 
 Detailed remote-play security controls remain in `docs/REMOTE-PLAY.md`.
 
@@ -211,6 +218,22 @@ For supported remote play:
 A direct child that retains Nexus's effective OS identity is therefore **not sufficient for supported remote play** when filesystem/socket permissions or local-process identity are being used as security controls. An implementation may use a service manager, a dedicated launcher, systemd sandboxing, a container, or another provider-independent mechanism, but the required property is isolation of the game execution context rather than any one product.
 
 Browser-only admin defenses such as CSRF, Host validation, and frame denial remain necessary for browser threats, but they do not replace this local-process boundary.
+
+## Cloud-local credential isolation for supported cloud profiles
+
+A distinct Unix user or sandbox does not by itself constrain network-reachable metadata or workload-identity services. On a cloud VM, a compromised game runtime must not be able to exchange its allowed network access for provider/account authority or sensitive host control data.
+
+For every supported cloud profile:
+
+- inventory provider/host-local metadata, workload/service-identity, credential-agent, bootstrap/user-data, and equivalent control-data surfaces that could be reachable from the VM;
+- the actual game-runtime identity/sandbox must be unable to obtain usable access tokens, keys, signed identity material, bootstrap secrets, or other sensitive control data from those surfaces;
+- the invariant must hold across the relevant direct IPv4, IPv6, DNS/hostname, proxy/redirect, loopback/link-local, and provider-specific aliases or transports used by that profile;
+- if the VM deliberately has an attached service/workload identity for Nexus, ingress, backup, or other host functions, its credential path must remain unavailable to the game context or otherwise constrained so game compromise cannot acquire authority outside the intended runtime boundary;
+- explicitly allowed ordinary public-internet egress must continue to work as a positive control, so the support property is not satisfied merely by disabling all networking.
+
+A profile may satisfy this invariant by attaching no usable service identity, disabling or restricting metadata/credential delivery, isolating those endpoints from the game network/sandbox, or another provider-appropriate mechanism. Nexus architecture does not prescribe one cloud vendor's control.
+
+The support check must be executed from the same security identity/sandbox used by the real game runtime. It must verify the deny/no-credential property for the concrete profile's relevant endpoint forms rather than assuming a generic Unix identity boundary covers them.
 
 ## Lifecycle expectation when switching games
 
@@ -261,6 +284,7 @@ Notes: <network/hypervisor details>
 Profile: Small cloud VM
 Status: experimental/tested/supported
 CPU/RAM: <measured>
+Service identity/metadata posture: <none/isolated/restricted and how verified>
 Bandwidth/storage caveats: <provider-specific>
 ```
 
@@ -277,9 +301,11 @@ Before advertising a concrete VM profile as supported:
 - [ ] Game-process resource limits do not break legitimate play.
 - [ ] Starting/stopping/switching releases expected resources.
 - [ ] Private game ports remain private.
-- [ ] From the game-runtime execution context, attempts to open trusted player ingress or connect to Nexus administration fail, while the assigned game listener and explicitly allowed egress still work.
+- [ ] From the game-runtime execution context, attempts to open trusted player ingress or connect to Nexus administration fail, while the assigned game listener still works.
+- [ ] For a cloud-hosted profile, from the real game-runtime execution context, relevant IPv4/IPv6/DNS/provider-local metadata, workload-identity, credential-agent, and equivalent endpoint forms do not yield usable provider/host credentials or sensitive control data.
+- [ ] Explicitly allowed ordinary public-internet egress still works as a positive control after the cloud-local credential isolation is applied.
 - [ ] Remote-play security acceptance criteria applicable to that deployment pass.
-- [ ] Provider-specific bandwidth/storage limits are documented separately.
+- [ ] Provider-specific bandwidth/storage limits and credential/metadata posture are documented separately.
 
 ## Future decision triggers
 
