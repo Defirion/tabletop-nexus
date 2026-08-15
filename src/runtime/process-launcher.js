@@ -116,12 +116,7 @@ function linuxProcessGroupHasLiveMembers(processGroupId) {
     try {
       stat = readFileSync(`/proc/${entry}/stat`, "utf8");
     } catch (error) {
-      if (
-        error?.code === "ENOENT" ||
-        error?.code === "ESRCH" ||
-        error?.code === "EACCES" ||
-        error?.code === "EPERM"
-      ) {
+      if (error?.code === "ENOENT" || error?.code === "ESRCH") {
         continue;
       }
       throw createProcessGroupInspectionError(error);
@@ -129,11 +124,18 @@ function linuxProcessGroupHasLiveMembers(processGroupId) {
 
     const endName = stat.lastIndexOf(")");
     if (endName < 0) {
-      continue;
+      throw createProcessGroupInspectionError(
+        new Error(`malformed /proc/${entry}/stat process name`),
+      );
     }
     const fields = stat.slice(endName + 2).trim().split(/\s+/);
     const state = fields[0];
     const processGroup = Number(fields[2]);
+    if (typeof state !== "string" || state.length === 0 || !Number.isInteger(processGroup)) {
+      throw createProcessGroupInspectionError(
+        new Error(`malformed /proc/${entry}/stat process metadata`),
+      );
+    }
 
     // Zombies have already relinquished listeners and other runtime resources;
     // waiting for their eventual parent reaping would turn graceful shutdown into
