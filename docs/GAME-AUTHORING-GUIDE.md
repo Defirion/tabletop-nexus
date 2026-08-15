@@ -49,7 +49,7 @@ A future Nexus-compatible game should be required to provide this common shape:
 - `BASE_PATH` uses the canonical no-trailing-slash form `/games/<game-id>`;
 - the normal player landing page is available publicly at `BASE_PATH/`;
 - Nexus strips `BASE_PATH` before forwarding browser game traffic to the private runtime, so private game routes remain rooted at `/`;
-- the runtime-management namespace `/__nexus` and `/__nexus/*` is reserved for the private Nexus-to-game seam and is never exposed through player proxying;
+- the canonical runtime-management namespace is `/__nexus` and `/__nexus/*`, but Nexus reserves the first path segment ASCII case-insensitively after canonicalization so case aliases such as `/__NEXUS/*` are also never exposed through player proxying;
 - production frontend content is served by that same supervised runtime rather than a separate development server;
 - all required browser-facing URLs, APIs, WebSockets/SSE, redirects, and generated links work on the public Nexus origin beneath `BASE_PATH` rather than constructing direct LAN/private-port URLs;
 - any game service worker is scoped so it cannot control the Nexus portal or sibling game paths;
@@ -177,7 +177,9 @@ with at least:
 
 The endpoint is private to the Nexus-to-game runtime seam. It is queried directly on the Nexus-assigned private host/port and is not exposed as a public player route under `BASE_PATH`.
 
-`/__nexus` is a reserved private runtime-management namespace. Nexus player routing must reject a request whose canonical post-`BASE_PATH` target is exactly `/__nexus` or begins `/__nexus/`, including encoded or otherwise ambiguous path forms that could canonicalize into that namespace. Games must not place player APIs/assets under the reserved namespace.
+`/__nexus` is the canonical spelling of the reserved private runtime-management namespace. At the player proxy, after the same path canonicalization used for security decisions and removal of `BASE_PATH`, Nexus compares the **first path segment** to ASCII `__nexus` case-insensitively. A target whose first segment is `__nexus` under that ASCII comparison is rejected whether it uses lowercase, uppercase, mixed case, or an encoded form that canonicalizes to one of those case aliases. This closes the boundary independently of whether a game's framework/router treats private routes case-sensitively. Games must not place player APIs/assets under any such case alias of the reserved segment.
+
+The reservation is a whole-segment rule, not a textual prefix rule: near names such as `/__nexusx/...` or `/__nexus-status/...` remain game-owned ordinary paths if the game chooses to define them.
 
 For the initial status schema:
 
@@ -232,11 +234,17 @@ runtime receives:  /board/
 
 browser requests:  /games/captain-flip/__nexus/status
 Nexus rejects:      reserved private management namespace; never forwarded
+
+browser requests:  /games/captain-flip/__NEXUS/status
+Nexus rejects:      ASCII case alias of reserved management segment; never forwarded
+
+near-name control: /games/captain-flip/__nexusx/status
+runtime may receive:/__nexusx/status if the game defines it
 ```
 
-The reserved-management rejection is applied after the public path has been canonicalized/validated, so equivalent encoded or traversal-like forms cannot bypass it.
+The reserved-management rejection is applied after the public path has been canonicalized/validated. Encoded or traversal-like forms that resolve to the reserved segment cannot bypass it, and ASCII case folding for the whole first segment prevents a case-insensitive backend router from creating an alias around the proxy boundary.
 
-The game therefore keeps ordinary private routes rooted at `/`, while using `BASE_PATH` when producing browser-facing URLs and build configuration. The `/__nexus` namespace is the exception: it is reserved to Nexus management and is not available for public game routes.
+The game therefore keeps ordinary private routes rooted at `/`, while using `BASE_PATH` when producing browser-facing URLs and build configuration. The canonical `/__nexus` namespace and all ASCII case aliases of that first segment are the exception: they are reserved to Nexus management and are not available for public game routes.
 
 Browser navigation, HTML/CSS/JS/assets, APIs, WebSockets, SSE/EventSource connections, redirects, generated links, cookies where used, and service-worker scope where used must remain compatible with that public mount.
 
@@ -251,8 +259,8 @@ Browser
    v
 Nexus public route: /games/<id>/...
    |
-   | validate/canonicalize; deny reserved /__nexus namespace;
-   | otherwise strip /games/<id> and proxy privately
+   | validate/canonicalize; ASCII-case-fold first segment for reserved-name check;
+   | deny if it equals __nexus; otherwise strip /games/<id> and proxy privately
    v
 Nexus-assigned game HOST:PORT
 ```
@@ -497,7 +505,7 @@ When planning or adapting a Nexus game, answer these questions in that game's ow
 - Does it bind exactly to the supplied `HOST`/`PORT` rather than a wildcard interface?
 - Does it treat `BASE_PATH` as `/games/<id>` without a trailing slash and generate the public landing path as `BASE_PATH/`?
 - Are private runtime routes correct after Nexus strips `BASE_PATH` before proxying?
-- Does the game keep player routes out of the reserved `/__nexus` runtime-management namespace?
+- Does the game keep player routes out of every ASCII case alias of the reserved `__nexus` first path segment?
 - Does `GET /__nexus/status` report Nexus readiness with the agreed status-schema and failure semantics?
 - If the runtime serves files from disk, is exposure restricted to an explicit public build/static root rather than repository/server files?
 - Does all required browser traffic return to the Nexus origin beneath `BASE_PATH`?
@@ -525,8 +533,9 @@ A reusable Nexus compatibility harness should eventually establish at least:
 - startup with non-default `HOST`, `PORT`, and `BASE_PATH` environment values;
 - binding to the assigned private `HOST`/`PORT` rather than widening exposure;
 - fixed private `/__nexus/status` readiness behavior, including valid `ready=false` and invalid/unavailable status handling;
-- public rejection of `/games/<id>/__nexus/status` and encoded/canonicalization variants that could resolve into the reserved management namespace;
-- unchanged successful routing for ordinary game paths that do not enter the reserved management namespace;
+- public rejection of lowercase `/games/<id>/__nexus/status`, direct ASCII mixed-case aliases such as `/games/<id>/__NEXUS/status` and `/games/<id>/__Nexus/status`, and encoded/canonicalization variants that resolve to any ASCII case alias of the reserved first segment;
+- unchanged successful routing for ordinary game paths and near-name controls such as `/games/<id>/__nexusx/status` and `/games/<id>/__nexus-status`, proving the reservation is a whole-segment rule rather than an overbroad prefix block;
+- direct private Nexus polling of canonical `GET /__nexus/status` on the assigned private host/port as a positive control;
 - initial HTML load at `BASE_PATH/`;
 - when dedicated-display support is advertised, successful public load of `BASE_PATH/board/` with private routing to `/board/` or an equivalent same-`BASE_PATH` internal redirect;
 - correct `BASE_PATH` stripping to private runtime routes;
