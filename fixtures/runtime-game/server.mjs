@@ -1,6 +1,8 @@
+import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { appendFile } from "node:fs/promises";
+import { appendFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import { fileURLToPath } from "node:url";
 
 const host = process.env.HOST;
 const port = Number(process.env.PORT);
@@ -23,10 +25,51 @@ const outputBytes = Number(options.get("--output-bytes") ?? "0");
 const statusMode = String(options.get("--status-mode") ?? "normal");
 const signalFile = options.get("--signal-file");
 const ignoreSigterm = options.has("--ignore-sigterm");
+const helperListenerRoot = options.has("--helper-listener-root");
+const helperListenerChild = options.has("--helper-listener-child");
+const helperIgnoreSigterm = options.has("--helper-ignore-sigterm");
+const runtimePidsFile = options.get("--runtime-pids-file");
+const rootExitAfterMs = options.has("--root-exit-after-ms")
+  ? Number(options.get("--root-exit-after-ms"))
+  : null;
 const exitAfterReadyMs = options.has("--exit-after-ready-ms")
   ? Number(options.get("--exit-after-ready-ms"))
   : null;
 const readyAt = Date.now() + readyDelayMs;
+
+async function noteSignal(signal) {
+  if (typeof signalFile === "string") {
+    await appendFile(signalFile, `${signal}\n`, "utf8");
+  }
+}
+
+if (helperListenerRoot && !helperListenerChild) {
+  const helperArgs = [fileURLToPath(import.meta.url), "--helper-listener-child"];
+  if (helperIgnoreSigterm) {
+    helperArgs.push("--ignore-sigterm");
+  }
+  const helper = spawn(process.execPath, helperArgs, {
+    env: process.env,
+    stdio: "ignore",
+  });
+
+  if (typeof runtimePidsFile === "string") {
+    await writeFile(runtimePidsFile, `${process.pid}\n${helper.pid}\n`, "utf8");
+  }
+
+  process.on("SIGTERM", async () => {
+    await noteSignal("SIGTERM");
+    if (!ignoreSigterm) {
+      process.exit(0);
+    }
+  });
+
+  if (rootExitAfterMs !== null) {
+    setTimeout(() => process.exit(17), Math.max(0, rootExitAfterMs));
+  }
+
+  await new Promise(() => {});
+}
 
 const server = createServer((request, response) => {
   if (request.url === "/__nexus/status") {
@@ -74,12 +117,6 @@ const server = createServer((request, response) => {
   response.writeHead(404);
   response.end();
 });
-
-async function noteSignal(signal) {
-  if (typeof signalFile === "string") {
-    await appendFile(signalFile, `${signal}\n`, "utf8");
-  }
-}
 
 process.on("SIGTERM", async () => {
   await noteSignal("SIGTERM");
