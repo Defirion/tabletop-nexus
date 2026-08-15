@@ -1,9 +1,14 @@
+import { randomBytes } from "node:crypto";
+
 import { PrivatePortAllocator } from "./private-ports.js";
 import {
   createLocalGameProcessLauncher,
   launchSupervisedGameProcess,
 } from "./process-launcher.js";
-import { waitForNexusReadiness } from "./readiness.js";
+import {
+  NEXUS_LAUNCH_TOKEN_ENV,
+  waitForNexusReadiness,
+} from "./readiness.js";
 
 export const GAME_LIFECYCLE_STATUS = Object.freeze({
   CONFIGURED: "configured",
@@ -31,10 +36,23 @@ function messageFor(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function defaultLaunchTokenFactory() {
+  return randomBytes(32).toString("hex");
+}
+
+function createLaunchToken(factory) {
+  const launchToken = factory();
+  if (typeof launchToken !== "string" || launchToken.length === 0) {
+    throw new TypeError("launchTokenFactory must return a non-empty string");
+  }
+  return launchToken;
+}
+
 export class RuntimeSupervisor {
   #allocator;
   #launcher;
   #requireDistinctSecurityBoundary;
+  #launchTokenFactory;
   #startupTimeoutMs;
   #pollIntervalMs;
   #requestTimeoutMs;
@@ -47,6 +65,7 @@ export class RuntimeSupervisor {
     allocator = new PrivatePortAllocator(),
     launcher = createLocalGameProcessLauncher(),
     requireDistinctSecurityBoundary = false,
+    launchTokenFactory = defaultLaunchTokenFactory,
     startupTimeoutMs = 30_000,
     pollIntervalMs = 200,
     requestTimeoutMs = 1_000,
@@ -60,6 +79,9 @@ export class RuntimeSupervisor {
     }
     if (typeof requireDistinctSecurityBoundary !== "boolean") {
       throw new TypeError("requireDistinctSecurityBoundary must be a boolean");
+    }
+    if (typeof launchTokenFactory !== "function") {
+      throw new TypeError("launchTokenFactory must be a function");
     }
     for (const [name, value, allowZero] of [
       ["startupTimeoutMs", startupTimeoutMs, false],
@@ -75,6 +97,7 @@ export class RuntimeSupervisor {
     this.#allocator = allocator;
     this.#launcher = launcher;
     this.#requireDistinctSecurityBoundary = requireDistinctSecurityBoundary;
+    this.#launchTokenFactory = launchTokenFactory;
     this.#startupTimeoutMs = startupTimeoutMs;
     this.#pollIntervalMs = pollIntervalMs;
     this.#requestTimeoutMs = requestTimeoutMs;
@@ -139,6 +162,7 @@ export class RuntimeSupervisor {
     let record;
     try {
       lease = await this.#allocator.allocate();
+      const launchToken = createLaunchToken(this.#launchTokenFactory);
       const execution = launchSupervisedGameProcess(game, {
         launcher: this.#launcher,
         requireDistinctSecurityBoundary: this.#requireDistinctSecurityBoundary,
@@ -146,6 +170,7 @@ export class RuntimeSupervisor {
           HOST: lease.host,
           PORT: String(lease.port),
           BASE_PATH: basePath,
+          [NEXUS_LAUNCH_TOKEN_ENV]: launchToken,
         },
       });
       const exitPromise = execution.waitForExit();
@@ -154,6 +179,7 @@ export class RuntimeSupervisor {
         lease,
         execution,
         exitPromise,
+        launchToken,
         basePath,
         status: GAME_LIFECYCLE_STATUS.STARTING,
         released: false,
@@ -170,6 +196,7 @@ export class RuntimeSupervisor {
       await waitForNexusReadiness({
         host: lease.host,
         port: lease.port,
+        launchToken,
         exitPromise,
         startupTimeoutMs: this.#startupTimeoutMs,
         pollIntervalMs: this.#pollIntervalMs,
