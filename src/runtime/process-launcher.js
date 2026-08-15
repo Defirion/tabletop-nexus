@@ -224,43 +224,46 @@ async function cleanUnexpectedProcessGroup(
   return cleanupError;
 }
 
-function sendSignal(child, processGroupId, signal, processKill) {
-  let rootSignalDelivered = false;
-  if (!childHasExited(child)) {
-    try {
-      if (!child.kill(signal)) {
-        if (!childHasExited(child)) {
-          throw createSignalDeliveryError(signal);
-        }
-      } else {
-        rootSignalDelivered = true;
-      }
-    } catch (error) {
-      if (!childHasExited(child)) {
-        if (error?.code === "GAME_SIGNAL_DELIVERY_FAILED") {
-          throw error;
-        }
-        throw createSignalDeliveryError(signal, error);
-      }
-    }
+function sendRootSignal(child, signal) {
+  if (childHasExited(child)) {
+    return false;
   }
 
+  try {
+    if (child.kill(signal)) {
+      return true;
+    }
+  } catch (error) {
+    if (childHasExited(child)) {
+      return false;
+    }
+    throw createSignalDeliveryError(signal, error);
+  }
+
+  if (childHasExited(child)) {
+    return false;
+  }
+  throw createSignalDeliveryError(signal);
+}
+
+function sendSignal(child, processGroupId, signal, processKill) {
   if (processGroupId === null) {
-    return rootSignalDelivered;
+    return sendRootSignal(child, signal);
   }
 
   try {
     processKill(-processGroupId, signal);
     return true;
   } catch (error) {
-    if (error?.code === "ESRCH" && rootSignalDelivered) {
-      return true;
+    if (error?.code !== "ESRCH") {
+      throw createSignalDeliveryError(signal, error);
     }
-    if (error?.code === "ESRCH") {
-      return false;
-    }
-    throw createSignalDeliveryError(signal, error);
   }
+
+  // A real detached Unix root is its process-group leader, so a live root with
+  // no matching group is an anomalous/fake-handle case. Falling back to the root
+  // keeps that case fail-closed without delivering every normal signal twice.
+  return sendRootSignal(child, signal);
 }
 
 function trackRuntimeExit(
