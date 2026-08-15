@@ -66,3 +66,36 @@ test("queryNexusStatus fails closed for malformed or unsupported status response
     });
   }
 });
+
+test("queryNexusStatus enforces an absolute request deadline while response bytes keep arriving", async () => {
+  await withStatusServer((_request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.write("{");
+    let ticks = 0;
+    const interval = setInterval(() => {
+      ticks += 1;
+      if (ticks >= 30) {
+        clearInterval(interval);
+        response.end("}");
+        return;
+      }
+      response.write(" ");
+    }, 10);
+    response.once("close", () => clearInterval(interval));
+  }, async (port) => {
+    const startedAt = Date.now();
+    const result = await queryNexusStatus({
+      host: "127.0.0.1",
+      port,
+      requestTimeoutMs: 60,
+    });
+    const elapsedMs = Date.now() - startedAt;
+
+    assert.deepEqual(result, {
+      ready: false,
+      valid: false,
+      reason: "request-timeout",
+    });
+    assert.ok(elapsedMs < 200, `absolute request deadline took ${elapsedMs}ms`);
+  });
+});
