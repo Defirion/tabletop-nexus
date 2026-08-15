@@ -105,7 +105,7 @@ Nexus needs to be able to:
 ```text
 start game
   |
-wait for health
+wait for Nexus readiness
   |
 proxy players for the duration of play
   |
@@ -210,7 +210,7 @@ port/process resources released
       |
 Game B start
       |
-health ready
+Nexus readiness confirmed
       |
 Game B exposed as playable
 ```
