@@ -77,9 +77,9 @@ Nexus may strip the public game prefix while proxying requests, but the browser-
 
 ## One-process LAN runtime
 
-The launch command must produce one self-contained game runtime from Nexus's perspective: one process boundary and one private browser-facing HTTP port. The process may use any internal architecture and is responsible for serving its frontend and browser-facing HTTP/WebSocket/SSE endpoints.
+The launch command must produce one self-contained game runtime from Nexus's perspective: one Nexus-owned lifecycle boundary and one private browser-facing HTTP port. The root process may use helpers internally, but every runtime-owned descendant must remain inside the lifecycle boundary owned by the launcher. A runtime must not daemonize, create a new session/process group, or otherwise move helpers outside that boundary while they retain Nexus-assigned runtime state or resources.
 
-Development servers are not part of the runtime contract.
+The runtime is responsible for serving its frontend and browser-facing HTTP/WebSocket/SSE endpoints. Development servers are not part of the runtime contract.
 
 ## Nexus readiness surface
 
@@ -134,4 +134,6 @@ If Nexus needs game-specific branches to understand those concepts, the integrat
 
 Nexus supervises one active game runtime initially. Starting another game stops the current runtime and releases its process/port resources before the replacement is launched.
 
-On Linux, Nexus first requests graceful termination with `SIGTERM`, waits for its configured grace period, and uses `SIGKILL` as the forced fallback if the runtime does not exit. Games should handle `SIGTERM` by closing their listener/helpers and releasing the assigned port promptly. Nexus treats unexpected process exit as a failed lifecycle state and releases the associated port lease after the process is known to have exited.
+On Linux, the local launcher places the supervised runtime in its own process group. Nexus sends graceful `SIGTERM` and forced `SIGKILL` to that runtime group rather than treating the manifest-launched root PID as the whole runtime. Completion is not reported, and the private-port lease is not released, while a live runtime-owned group member remains. If the root process exits unexpectedly while descendants survive, Nexus cleans up the remaining group before treating the runtime as terminated.
+
+Games should handle `SIGTERM` by closing their listener/helpers and releasing the assigned port promptly. Runtime-owned helpers must remain in the launcher-owned lifecycle boundary until they exit. Nexus treats unexpected complete-runtime exit as a failed lifecycle state and releases the associated port lease only after termination is established.
