@@ -49,11 +49,15 @@ Private port allocation is implemented as an OS-assisted loopback allocator. Nex
 
 The remaining supervisor responsibilities are spawning manifest-declared commands directly (never through shell interpolation), supplying `HOST`/`PORT`/`BASE_PATH`, polling Nexus readiness, tracking lifecycle state, enforcing the initial one-active-game policy, and stopping children with graceful and forced phases.
 
+The launch boundary must also remain compatible with the stronger remote-play deployment boundary: a supported internet-facing deployment must be able to run the game under a security identity/sandbox distinct from Nexus so compromise of the game cannot open trusted player ingress or reach Nexus administration. Directly spawning a same-OS-identity child may remain useful for development/LAN operation, but it is not by itself sufficient isolation for supported remote play.
+
 The current schema-1 contract still uses configurable `runtime.healthPath`. Before R1 readiness polling is implemented, the plan requires an atomic contract/schema, validator, and test migration to the fixed private `/__nexus/status` readiness surface rather than implementing the old seam and replacing it shortly afterward.
 
 ### Reverse proxy (R2)
 
 Routes HTTP and upgrade/WebSocket traffic from `/games/<id>/...` to the correct private game process. It must remain transport-agnostic and must not inspect game payloads.
+
+The private runtime-management namespace is a deliberate exception to prefix forwarding: after path canonicalization and `/games/<id>` removal, a target equal to `/__nexus` or beneath `/__nexus/` is never player-proxyable. Nexus uses that reserved namespace only across the private Nexus-to-game management seam, including `GET /__nexus/status`.
 
 ## Security model
 
@@ -63,7 +67,8 @@ The current implementation target is a trusted home LAN, not hostile multi-tenan
 - public static paths are allowlisted rather than mapped directly to arbitrary filesystem paths;
 - manifests are local trusted configuration, not remotely supplied launch instructions;
 - future process spawning must use executable + argument arrays without shell interpolation;
-- invalid or unregistered public game routes must be rejected.
+- invalid or unregistered public game routes must be rejected;
+- the reserved private game-management namespace must never be forwarded from a player route.
 
 Friends-only internet exposure is planned separately in [`REMOTE-PLAY.md`](REMOTE-PLAY.md). That design deliberately keeps players unauthenticated initially, adds a stronger public-ingress threat model and private admin boundary, and is not considered supported until its documented acceptance gate passes.
 
