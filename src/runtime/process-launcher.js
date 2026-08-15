@@ -128,21 +128,18 @@ function trackChildExit(child) {
   });
 }
 
-export function createLocalGameProcessLauncher({
-  spawn = nodeSpawn,
-  parentEnv = process.env,
-  captureOutput = false,
-  setTimeoutFn = setTimeout,
-  clearTimeoutFn = clearTimeout,
-} = {}) {
+function createLocalProcessLauncher({
+  spawn,
+  parentEnv,
+  captureOutput,
+  setTimeoutFn,
+  clearTimeoutFn,
+}) {
   if (typeof spawn !== "function") {
     throw new TypeError("spawn must be a function");
   }
   if (parentEnv === null || Array.isArray(parentEnv) || typeof parentEnv !== "object") {
     throw new TypeError("parentEnv must be an object");
-  }
-  if (typeof captureOutput !== "boolean") {
-    throw new TypeError("captureOutput must be a boolean");
   }
   if (typeof setTimeoutFn !== "function" || typeof clearTimeoutFn !== "function") {
     throw new TypeError("timer functions must be functions");
@@ -157,9 +154,9 @@ export function createLocalGameProcessLauncher({
         cwd: spec.cwd,
         shell: false,
         env: { ...parentEnv, ...spec.environment },
-        // Supervisor launchers must never leave hidden stdout/stderr pipes with
-        // no consumer. Direct launch opts into captureOutput below so callers
-        // that receive the ChildProcess can still consume those streams.
+        // Supervisor launchers never leave hidden stdout/stderr pipes with no
+        // consumer. The direct helper uses the private capturing variant below
+        // because it returns the ChildProcess to the caller that owns the pipes.
         stdio: captureOutput
           ? ["ignore", "pipe", "pipe"]
           : ["ignore", "ignore", "ignore"],
@@ -206,6 +203,21 @@ export function createLocalGameProcessLauncher({
       }
       return Object.freeze({ ...(await exit), forced: true });
     },
+  });
+}
+
+export function createLocalGameProcessLauncher({
+  spawn = nodeSpawn,
+  parentEnv = process.env,
+  setTimeoutFn = setTimeout,
+  clearTimeoutFn = clearTimeout,
+} = {}) {
+  return createLocalProcessLauncher({
+    spawn,
+    parentEnv,
+    captureOutput: false,
+    setTimeoutFn,
+    clearTimeoutFn,
   });
 }
 
@@ -263,15 +275,21 @@ export function launchSupervisedGameProcess(
  * Launches one validated game directly for the local/LAN runtime profile.
  *
  * Direct callers receive the ChildProcess, so stdout/stderr remain piped for the
- * caller to consume. The supervised local launcher defaults to discarded output
- * instead, avoiding an unowned pipe/backpressure dependency.
+ * caller to consume. The supervisor-capable exported local launcher always uses
+ * discarded output instead, avoiding an unowned pipe/backpressure dependency.
  */
 export function launchLocalGameProcess(
   game,
   { spawn = nodeSpawn, parentEnv = process.env, environment = {} } = {},
 ) {
   return launchGameProcess(game, {
-    launcher: createLocalGameProcessLauncher({ spawn, parentEnv, captureOutput: true }),
+    launcher: createLocalProcessLauncher({
+      spawn,
+      parentEnv,
+      captureOutput: true,
+      setTimeoutFn: setTimeout,
+      clearTimeoutFn: clearTimeout,
+    }),
     environment,
   });
 }
