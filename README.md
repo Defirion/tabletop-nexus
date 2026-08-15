@@ -42,8 +42,7 @@ Tabletop Nexus :3000
     |-- /api/games            configured game metadata
     |-- /games/<game-id>/...  reverse proxy (planned R2)
     |
-    +-- private game process A (planned R1)
-    +-- private game process B (planned R1)
+    +-- selected private game process (planned R1; one active initially)
 ```
 
 Compatible games use the integration boundary in [`GAME-CONTRACT.md`](GAME-CONTRACT.md).
