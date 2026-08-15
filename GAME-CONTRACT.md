@@ -23,8 +23,8 @@ Compatible games expose `boardgame.json` at the game repository root:
     "dedicatedDisplay": false
   },
   "runtime": {
-    "command": "npm",
-    "args": ["run", "start:nexus"],
+    "command": "node",
+    "args": ["server.js"],
     "healthPath": "/healthz"
   }
 }
@@ -40,6 +40,8 @@ Compatible games expose `boardgame.json` at the game repository root:
 - `runtime.command`: non-empty executable name or path that Nexus will launch directly, without a shell.
 - `runtime.args`: array of argument strings passed directly to the executable.
 - `runtime.healthPath`: local absolute HTTP path beginning with `/`; query strings, fragments, and protocol-relative paths are not allowed.
+
+`runtime.command` must identify a program the target operating system can execute directly. It is not a command line: shell built-ins, pipelines, redirects, or strings such as `npm run start:nexus` do not belong in this field. Keep every argument in `runtime.args`. Platform command shims that themselves require a shell are not portable Nexus launch targets; use the underlying executable entrypoint instead.
 
 `description`, `personalDevices`, and `dedicatedDisplay` are optional descriptive metadata. Unknown fields are ignored by schema 1 so games may carry their own metadata without widening Nexus's responsibility.
 

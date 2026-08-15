@@ -64,13 +64,19 @@ test("canonical product verifier rejects a target SHA that does not match checko
   assert.match(`${result.stdout}\n${result.stderr}`, /canonical product verifier checkout is .* expected 0000000000000000000000000000000000000000/);
 });
 
-test("canonical verifier requires R1 private-port source and focused regression coverage", async () => {
-  const verifier = await read("verify.ps1");
+test("canonical verifier requires R1 runtime sources and focused regression coverage", async () => {
+  const [verifier, productVerifier] = await Promise.all([
+    read("verify.ps1"),
+    read("scripts/verify-product.mjs"),
+  ]);
   const requiredMatch = verifier.match(/\$productRequired = @\(([\s\S]*?)\n\s*\)/);
 
   assert.ok(requiredMatch, "productRequired block must remain explicit");
   assert.match(requiredMatch[1], /'src\/runtime\/private-ports\.js'/);
+  assert.match(requiredMatch[1], /'src\/runtime\/process-launcher\.js'/);
   assert.match(requiredMatch[1], /'test\/private-ports\.test\.js'/);
+  assert.match(requiredMatch[1], /'test\/process-launcher\.test\.js'/);
+  assert.match(productVerifier, /\["--check", "src\/runtime\/process-launcher\.js"\]/);
   assert.match(verifier, /Required product file is missing:/);
   assert.match(verifier, /\$Checks\.Add\('Required product files are present\.'\)/);
   assert.match(verifier, /Node\.js runtime satisfies the product requirement/);
