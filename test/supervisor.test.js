@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn as nodeSpawn } from "node:child_process";
 import { createServer } from "node:net";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -6,6 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+import { createLocalGameProcessLauncher } from "../src/runtime/process-launcher.js";
 import { PrivatePortAllocator } from "../src/runtime/private-ports.js";
 import { RuntimeSupervisor } from "../src/runtime/supervisor.js";
 
@@ -69,6 +71,46 @@ function createRecordingAllocator() {
       },
     },
   };
+}
+
+function createFirstProcessSignalFailureLauncher() {
+  let spawnCount = 0;
+  let allowFirstTermination = false;
+  const launcher = createLocalGameProcessLauncher({
+    spawn(command, args, options) {
+      const child = nodeSpawn(command, args, options);
+      spawnCount += 1;
+      if (spawnCount === 1) {
+        const realKill = child.kill.bind(child);
+        child.kill = (signal) => {
+          if (!allowFirstTermination) {
+            queueMicrotask(() => child.emit("error", Object.assign(
+              new Error(`synthetic ${signal} delivery failure`),
+              { code: "EPERM" },
+            )));
+            return false;
+          }
+          return realKill(signal);
+        };
+      }
+      return child;
+    },
+  });
+
+  return {
+    launcher,
+    allowFirstTermination() {
+      allowFirstTermination = true;
+    },
+  };
+}
+
+async function waitUntil(predicate, timeoutMs = 2_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate() && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.equal(predicate(), true, `condition was not met within ${timeoutMs}ms`);
 }
 
 test("RuntimeSupervisor supplies canonical launch environment and reaches running only after fixed readiness", async () => {
@@ -190,6 +232,92 @@ test("RuntimeSupervisor stops and releases the active game before starting anoth
   }
 });
 
+test("RuntimeSupervisor retains the lease and blocks replacement allocation when signal delivery fails until definitive exit", async () => {
+  const recording = createRecordingAllocator();
+  const signalFailure = createFirstProcessSignalFailureLauncher();
+  const supervisor = new RuntimeSupervisor({
+    allocator: recording.allocator,
+    launcher: signalFailure.launcher,
+    startupTimeoutMs: 2_000,
+    pollIntervalMs: 20,
+    requestTimeoutMs: 100,
+    stopGracePeriodMs: 100,
+  });
+
+  try {
+    await supervisor.start(fixtureGame("kill-failure-a", ["--exit-after-ready-ms=300"]));
+    const first = supervisor.getActiveRuntime();
+
+    await assert.rejects(
+      () => supervisor.start(fixtureGame("kill-failure-b")),
+      /failed to deliver SIGTERM to game process/,
+    );
+
+    assert.equal(recording.allocations.length, 1);
+    assert.equal(recording.allocations[0].released, false);
+    assert.equal(supervisor.getActiveRuntime().gameId, "kill-failure-a");
+    assert.equal(supervisor.getState("kill-failure-a").status, "failed");
+    const stillLive = await fetch(`http://${first.host}:${first.port}/fixture`);
+    assert.equal(stillLive.status, 200);
+
+    await waitUntil(() => recording.allocations[0].released);
+    assert.equal(supervisor.getActiveRuntime(), null);
+    assert.equal(recording.events.includes("allocate:2"), false);
+
+    await supervisor.start(fixtureGame("kill-failure-b"));
+    assert.equal(recording.allocations.length, 2);
+    assert.ok(
+      recording.events.indexOf("release:1:true") < recording.events.indexOf("allocate:2"),
+      `expected confirmed exit/release before replacement allocation, got ${recording.events.join(", ")}`,
+    );
+  } finally {
+    signalFailure.allowFirstTermination();
+    await supervisor.stop().catch(() => undefined);
+  }
+});
+
+test("RuntimeSupervisor retains a startup-failure lease when cleanup signaling fails and releases it on later definitive exit", async () => {
+  const recording = createRecordingAllocator();
+  const signalFailure = createFirstProcessSignalFailureLauncher();
+  const supervisor = new RuntimeSupervisor({
+    allocator: recording.allocator,
+    launcher: signalFailure.launcher,
+    startupTimeoutMs: 80,
+    pollIntervalMs: 15,
+    requestTimeoutMs: 30,
+    stopGracePeriodMs: 50,
+  });
+
+  try {
+    await assert.rejects(
+      () => supervisor.start(fixtureGame("startup-cleanup-failure", [
+        "--status-mode=malformed",
+        "--exit-after-ready-ms=300",
+      ])),
+      /game readiness timed out/,
+    );
+
+    assert.equal(recording.allocations.length, 1);
+    assert.equal(recording.allocations[0].released, false);
+    assert.equal(supervisor.getActiveRuntime().gameId, "startup-cleanup-failure");
+    assert.equal(supervisor.getState("startup-cleanup-failure").status, "failed");
+    assert.match(supervisor.getState("startup-cleanup-failure").error, /cleanup failed: failed to deliver SIGTERM/);
+
+    await waitUntil(() => recording.allocations[0].released);
+    assert.equal(supervisor.getActiveRuntime(), null);
+
+    await supervisor.start(fixtureGame("after-startup-cleanup-failure"));
+    assert.equal(recording.allocations.length, 2);
+    assert.ok(
+      recording.events.indexOf("release:1:true") < recording.events.indexOf("allocate:2"),
+      `expected later definitive exit/release before recovery allocation, got ${recording.events.join(", ")}`,
+    );
+  } finally {
+    signalFailure.allowFirstTermination();
+    await supervisor.stop().catch(() => undefined);
+  }
+});
+
 test("RuntimeSupervisor uses forced shutdown fallback when SIGTERM does not stop a Linux game", { skip: process.platform === "win32" }, async () => {
   const root = await mkdtemp(join(tmpdir(), "nexus-force-"));
   const signals = join(root, "signals.txt");
@@ -210,6 +338,37 @@ test("RuntimeSupervisor uses forced shutdown fallback when SIGTERM does not stop
     assert.match(await readFile(signals, "utf8"), /SIGTERM/);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("RuntimeSupervisor enforces the absolute startup deadline against trickling readiness and unblocks queued lifecycle work", async () => {
+  const recording = createRecordingAllocator();
+  const supervisor = new RuntimeSupervisor({
+    allocator: recording.allocator,
+    startupTimeoutMs: 150,
+    pollIntervalMs: 20,
+    requestTimeoutMs: 1_000,
+    stopGracePeriodMs: 300,
+  });
+
+  try {
+    const startedAt = Date.now();
+    const stalledStart = supervisor.start(fixtureGame("trickle-start", ["--status-mode=trickle"]));
+    const queuedStart = supervisor.start(fixtureGame("after-trickle"));
+
+    await assert.rejects(stalledStart, /game readiness timed out/);
+    const elapsedMs = Date.now() - startedAt;
+    assert.ok(elapsedMs < 600, `startup deadline took ${elapsedMs}ms`);
+
+    assert.deepEqual(await queuedStart, { gameId: "after-trickle", status: "running" });
+    assert.equal(recording.allocations.length, 2);
+    assert.equal(recording.allocations[0].released, true);
+    assert.ok(
+      recording.events.indexOf("release:1:true") < recording.events.indexOf("allocate:2"),
+      `expected failed startup cleanup before queued allocation, got ${recording.events.join(", ")}`,
+    );
+  } finally {
+    await supervisor.stop();
   }
 });
 
