@@ -49,7 +49,7 @@ A future Nexus-compatible game should be required to provide this common shape:
 - `BASE_PATH` uses the canonical no-trailing-slash form `/games/<game-id>`;
 - the normal player landing page is available publicly at `BASE_PATH/`;
 - Nexus strips `BASE_PATH` before forwarding browser game traffic to the private runtime, so private game routes remain rooted at `/`;
-- production frontend assets are served by that same supervised runtime rather than a separate development server;
+- production frontend content is served by that same supervised runtime rather than a separate development server;
 - all required browser-facing URLs, APIs, WebSockets/SSE, redirects, and generated links work on the public Nexus origin beneath `BASE_PATH` rather than constructing direct LAN/private-port URLs;
 - any game service worker is scoped so it cannot control the Nexus portal or sibling game paths;
 - a fixed private Nexus readiness endpoint at `GET /__nexus/status`;
@@ -59,7 +59,7 @@ A future Nexus-compatible game should be required to provide this common shape:
 - for session-based multiplayer games, a normal landing page that exposes currently joinable game-owned sessions/rooms and provides a way to create a new session;
 - recovery from ordinary browser refresh/transient network interruption without requiring the previous TCP/WebSocket/SSE connection to survive;
 - room/session/player identifiers that remain opaque to Nexus;
-- a production static root containing only intended public browser artifacts.
+- only intended browser-facing artifacts/content are exposed; if files are served from disk, the runtime exposes an explicit public build/static root rather than the repository root or arbitrary server files.
 
 ### GUIDANCE ONLY
 
@@ -67,7 +67,7 @@ These are useful patterns but should not be core compatibility requirements yet:
 
 - automatically reclaiming the exact prior seat when a reconnect identity is still valid;
 - browser storage/cookie namespacing beyond what same-origin/base-path safety requires;
-- game-specific hidden-information/redaction design beyond keeping server-only data out of the public static root;
+- game-specific hidden-information/redaction design beyond keeping server-only data out of public browser artifacts;
 - designing for modest resource use while concrete supported deployment profiles and their limits are established from measurement;
 - particular reconnect-token, backoff, snapshot, caching, or persistence strategies.
 
@@ -92,11 +92,11 @@ A richer Nexus status surface is intentionally not required now. The fixed readi
 
 The baseline game contract also does **not** promise games a trustworthy public client IP or a particular forwarded-client header. Nexus owns transport-level client attribution and platform abuse controls. If trusted client attribution is ever exposed to games, it should be an explicit future contract rather than an accidental dependency on `X-Forwarded-For`, `CF-Connecting-IP`, or similar headers.
 
-## Current implemented seam and migration gate
+## Current implemented seam and migration gates
 
 `GAME-CONTRACT.md` and `src/registry.js` still define/enforce the current schema-1 manifest, including configurable `runtime.healthPath`.
 
-Do not silently redefine schema 1 underneath already-valid manifests. Before the first real game adapters, the stricter contract should be promoted atomically with the relevant manifest validation and compatibility tests. `docs/PLAN.md` records that migration gate.
+Do not silently redefine schema 1 underneath already-valid manifests. Before R1 implements Nexus readiness polling, migrate from configurable `runtime.healthPath` to the fixed `/__nexus/status` surface atomically with the contract/schema decision, manifest validation, and tests. Before the first real game adapters, promote the remaining selected behavioral requirements with their compatibility checks. `docs/PLAN.md` records both gates.
 
 The desired future manifest no longer needs a configurable Nexus readiness path because the path itself becomes part of the compatibility contract.
 
@@ -132,18 +132,18 @@ Nexus
   v
 one game runtime / one private port
   |
-  +-- public built HTML/CSS/JS/assets
+  +-- public built/rendered HTML/CSS/JS/assets
   +-- game HTTP API, if used
   +-- SSE, if used
   +-- WebSocket endpoint, if used
   +-- private authoritative state in server memory/storage
 ```
 
-HTTP, static assets, WebSocket upgrades, and SSE used by the game must all be reachable through that one Nexus-assigned browser-facing port. A separate Vite/dev server or secondary browser-facing production port is not part of the supported Nexus runtime shape.
+HTTP, browser content, WebSocket upgrades, and SSE used by the game must all be reachable through that one Nexus-assigned browser-facing port. A separate Vite/dev server or secondary browser-facing production port is not part of the supported Nexus runtime shape.
 
-Serving built frontend files from the runtime does not make private server state public. The runtime must expose only an explicit public build directory, not the repository root or arbitrary server files.
+Serving frontend content from the runtime does not make private server state public. Dynamically rendered or embedded assets are fine. If the runtime serves files from disk, it must expose only an explicit public build/static directory, not the repository root or arbitrary server files.
 
-Credentials, private configuration, authoritative state, and any information the game intentionally keeps server-only must stay outside that public static root. Stronger hidden-information/anti-cheat rules remain game-owned because Nexus is primarily intended for small trusted groups rather than competitive hosting.
+Credentials, private configuration, authoritative state, and any information the game intentionally keeps server-only must stay outside the browser-facing content surface. Stronger hidden-information/anti-cheat rules remain game-owned because Nexus is primarily intended for small trusted groups rather than competitive hosting.
 
 ## Nexus readiness status versus game health
 
@@ -170,16 +170,24 @@ with at least:
 
 The endpoint is private to the Nexus-to-game runtime seam. It is queried directly on the Nexus-assigned private host/port and should not be exposed as a public player route under `BASE_PATH`.
 
+For the initial status schema:
+
+- a well-formed status response returns HTTP `200` with a JSON object and `Content-Type: application/json`, whether `ready` is `true` or `false`;
+- `schema` is the integer status-payload schema version and begins at `1`;
+- `ready` is a required boolean;
+- readers ignore unknown fields when the declared status schema is supported, allowing optional fields to be added compatibly;
+- timeout, connection failure, non-`200`, malformed JSON, missing/invalid required fields, or an unsupported status schema are treated as **not ready** and surfaced through Nexus lifecycle/startup handling rather than routed to players.
+
 Conceptually:
 
 ```text
-process unreachable
-    -> runtime unavailable
+process unreachable / invalid status
+    -> runtime unavailable or startup failure
 
-/__nexus/status reachable, ready=false
+/__nexus/status valid, ready=false
     -> starting / not ready
 
-/__nexus/status reachable, ready=true
+/__nexus/status valid, ready=true
     -> running / ready for players
 ```
 
@@ -422,7 +430,7 @@ A game should not require access to:
 - another game's state directory;
 - another game's private port.
 
-The baseline compatibility rule is intentionally modest: the production web server must expose only intended public browser artifacts. Game-specific secrecy/redaction policy stays inside the game.
+The baseline compatibility rule is intentionally modest: the production web server must expose only intended public browser artifacts/content. Game-specific secrecy/redaction policy stays inside the game.
 
 For the stronger public-ingress and proxy boundary, follow `docs/REMOTE-PLAY.md`; game code should not attempt to recreate Nexus's edge abuse controls or client-attribution policy.
 
@@ -446,8 +454,8 @@ When planning or adapting a Nexus game, answer these questions in that game's ow
 - Does it bind exactly to the supplied `HOST`/`PORT` rather than a wildcard interface?
 - Does it treat `BASE_PATH` as `/games/<id>` without a trailing slash and generate the public landing path as `BASE_PATH/`?
 - Are private runtime routes correct after Nexus strips `BASE_PATH` before proxying?
-- Does `GET /__nexus/status` report Nexus readiness with the agreed minimal response?
-- Does the runtime serve only an explicit public frontend build directory?
+- Does `GET /__nexus/status` report Nexus readiness with the agreed status-schema and failure semantics?
+- If the runtime serves files from disk, is exposure restricted to an explicit public build/static root rather than repository/server files?
 - Does all required browser traffic return to the Nexus origin beneath `BASE_PATH`?
 - If a service worker exists, is its scope contained beneath `BASE_PATH`?
 - Which transports does the game use: HTTP, SSE, WebSocket?
@@ -470,16 +478,16 @@ A reusable Nexus compatibility harness should eventually establish at least:
 
 - startup with non-default `HOST`, `PORT`, and `BASE_PATH` environment values;
 - binding to the assigned private `HOST`/`PORT` rather than widening exposure;
-- fixed private `/__nexus/status` readiness behavior;
+- fixed private `/__nexus/status` readiness behavior, including valid `ready=false` and invalid/unavailable status handling;
 - initial HTML load at `BASE_PATH/`;
 - correct `BASE_PATH` stripping to private runtime routes;
-- static assets beneath `BASE_PATH`;
+- static assets beneath `BASE_PATH` when used;
 - same-origin API traffic beneath `BASE_PATH`;
 - WebSocket/SSE routing when used;
 - HTTPS/WSS compatibility through the Nexus proxy;
 - redirect/generated-link base-path safety;
 - service-worker scope containment when used;
-- public static-root containment;
+- browser-artifact exposure/static-root containment when filesystem static serving is used;
 - `SIGTERM` graceful shutdown and port release on Linux.
 
 Game-specific verification should establish the behavioral requirements Nexus cannot generically understand, including:
