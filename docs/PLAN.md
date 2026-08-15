@@ -19,7 +19,7 @@ GitHub PR state is the operational source of truth. Checkboxes describe implemen
 - [ ] Before implementing readiness polling, decide the next contract/schema migration and replace configurable `runtime.healthPath` with the fixed private `GET /__nexus/status` readiness surface, updating `GAME-CONTRACT.md`, manifest validation, and tests atomically rather than redefining schema 1 in place.
 - [ ] Poll the fixed Nexus readiness surface and expose lifecycle state.
 - [ ] Implement graceful `SIGTERM` stop on Linux plus forced-shutdown fallback.
-- [ ] Enforce the initial one-active-game policy: stop the current runtime and release its process/port resources before another game becomes ready.
+- [ ] Enforce the initial one-active-game policy: stop the current runtime and release its process/port resources before starting another game runtime.
 - [ ] Add lifecycle tests using a tiny original fixture game.
 
 ## R2 — Single-port routing
