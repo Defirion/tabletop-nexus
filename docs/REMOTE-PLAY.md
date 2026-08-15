@@ -35,7 +35,7 @@ Design for hostile public HTTP/WebSocket traffic, including:
 - long-lived/slow connection exhaustion;
 - normal vulnerabilities in trusted game/runtime dependencies.
 
-Installed games are trusted code selected by the host. They are not treated as malicious tenants in the initial design. That trust does **not** mean a game process compromised through a dependency exploit may reach Nexus control-plane authority; the local runtime boundary below remains required.
+Installed games are trusted code selected by the host. They are not treated as malicious tenants in the initial design. That trust does **not** mean a game process compromised through a dependency exploit may reach Nexus control-plane authority or turn VM-local provider/host credential services into authority outside the intended game-runtime boundary; the runtime and deployment boundaries below remain required.
 
 ### 2.2 VM and process isolation
 
@@ -48,10 +48,13 @@ Containers are **not mandatory** for initial support. The lightweight supported-
 - game processes cannot open the trusted Nexus player-ingress socket;
 - game processes cannot connect to the Nexus admin listener/control plane from the local host;
 - games do not inherit/read `cloudflared` credentials;
+- on supported cloud profiles, the game execution context cannot obtain usable provider/host credentials or sensitive control data from metadata, workload-identity, credential-agent, or equivalent local endpoints;
 - per-game/process CPU, memory, task/process, and file-descriptor limits exist;
 - graceful stop, forced stop, and crash-loop suppression exist.
 
 A direct child that retains Nexus's effective OS identity is not sufficient for supported remote play when local filesystem/socket identity is part of the security boundary. A service manager, dedicated launcher, sandbox, container, or another provider-independent mechanism may enforce the separation; the required property is that code executing in the game-runtime context cannot use Nexus's local privileges.
+
+Likewise, a distinct Unix identity alone is not sufficient for a supported cloud profile when network-reachable metadata/workload-identity services remain usable from that identity. The deployment profile must independently close or neutralize that credential/control-data path.
 
 VM-only limits protect the physical host but do not prevent one runaway or compromised game from starving or controlling Nexus inside the VM, hence both resource limits and control-plane isolation are required.
 
@@ -141,16 +144,24 @@ Already decided regardless of that choice:
 - games do not inherit its environment;
 - secrets never enter Git or application logs;
 - account-wide Cloudflare management credentials should not reside on the game VM unnecessarily;
+- a supported cloud profile must inventory any attached provider service/workload identity and metadata/credential delivery surfaces rather than assuming Unix-user separation hides them from games;
+- any provider/host identity deliberately available to Nexus, ingress, backup, or another host service must not yield usable credentials or sensitive control data to the game-runtime context;
 - rotation/revocation must be documented;
 - public ingress must be disable-able from Cloudflare externally even if the VM is unavailable/untrusted.
 
-Resolve the exact credential model before production Cloudflare deployment.
+Resolve the exact Cloudflare credential model before production Cloudflare deployment. Provider/host-local credential posture is a separate deployment-profile requirement and must be established for each supported cloud profile.
 
 ### 2.10 Egress
 
 Ordinary public-internet egress from the VM is permitted initially. A complex destination-by-destination default-deny policy is not required.
 
-However, game/VM processes should not have unnecessary access to sensitive home-LAN administration surfaces or unrelated Tailscale peers. Prefer a network/firewall/Tailscale configuration that permits normal internet access while denying lateral access to things such as router/NAS admin services, desktop file shares, unrelated tailnet devices, and the Nexus admin listener unless explicitly required by a separately authenticated boundary.
+However, **ordinary internet egress does not include provider/host-local credential or sensitive-control surfaces**. For a supported cloud profile, the game-runtime context must not be able to obtain usable provider/host credentials or sensitive control data from metadata, workload/service-identity endpoints, credential agents, bootstrap/user-data services, or equivalent local mechanisms. This invariant applies even when those services are network-reachable from the VM as a whole.
+
+The profile must cover the concrete endpoint forms its provider/environment exposes, including relevant IPv4, IPv6, DNS/hostname aliases, loopback/link-local forms, redirects/proxies, local agents/sockets, or other provider-specific access paths. A profile may satisfy the property by attaching no usable service identity, disabling/restricting metadata or credential delivery, isolating the endpoint from the game sandbox/network context, or another provider-appropriate control.
+
+Game/VM processes should also not have unnecessary access to sensitive home-LAN administration surfaces or unrelated Tailscale peers. Prefer a network/firewall/Tailscale configuration that permits normal public internet access while denying lateral access to things such as router/NAS admin services, desktop file shares, unrelated tailnet devices, the Nexus admin listener, and provider/host-local credential/control surfaces not intended for the game.
+
+The support gate retains a positive control for explicitly allowed ordinary public-internet egress so a profile cannot satisfy the credential-isolation requirement merely by disabling all game networking.
 
 ## 3. Target topology
 
@@ -394,22 +405,25 @@ Edge rules must be tested against legitimate mobile browsers, WebSocket upgrades
 High-level desired network state:
 
 ```text
-Public inbound to VM:                    none
-Cloudflare:                              outbound tunnel
-Tailscale:                               explicit admin-only access
-Nexus -> game ports:                     local/private
-Game ports -> LAN/internet:              unreachable
-Game runtime -> Nexus player socket:     denied
-Game runtime -> Nexus admin listener:    denied
-VM/games -> sensitive LAN/Tailscale:     denied unless required
-VM/games -> ordinary public internet:    allowed initially
+Public inbound to VM:                              none
+Cloudflare:                                        outbound tunnel
+Tailscale:                                         explicit admin-only access
+Nexus -> game ports:                               local/private
+Game ports -> LAN/internet:                        unreachable
+Game runtime -> Nexus player socket:               denied
+Game runtime -> Nexus admin listener:              denied
+Game runtime -> provider/host credential surfaces: denied or no usable credentials/control data
+VM/games -> sensitive LAN/Tailscale:               denied unless required
+VM/games -> ordinary public internet:              allowed initially
 ```
 
 Verify IPv4 **and IPv6**.
 
 Games receive `HOST`, `PORT`, and `BASE_PATH` and must honor the assigned private bind host. A game that cannot bind privately must be rejected for supported remote play or wrapped by deployment-level enforcement before use.
 
-The local-isolation checks must be executed from the same security identity/sandbox used by the real game runtime. Positive controls should prove that Nexus can still reach the assigned game listener, `cloudflared` can still open the player socket, the intended administrator can still reach the admin listener over the private path, and the game retains explicitly allowed ordinary internet egress.
+The local-isolation checks must be executed from the same security identity/sandbox used by the real game runtime. For a cloud profile, enumerate the relevant provider/host metadata, workload-identity, credential-agent, bootstrap/control-data, and equivalent endpoint forms and test them from that exact context, including applicable IPv4, IPv6, DNS/hostname, loopback/link-local, redirect/proxy, local-agent/socket, and provider-specific aliases. The required observation is that they do not yield usable provider/host credentials or sensitive control data.
+
+Positive controls should prove that Nexus can still reach the assigned game listener, `cloudflared` can still open the player socket, the intended administrator can still reach the admin listener over the private path, and the game retains explicitly allowed ordinary public-internet egress. The metadata/credential boundary is therefore verified independently of a blanket network shutdown.
 
 ## 10. Browser/HTTPS security
 
@@ -442,7 +456,7 @@ Baseline structured events should cover at least:
 - size/rate/connection-limit events;
 - client-count/anomaly warnings.
 
-Do not log tunnel tokens, cookies unnecessarily, full sensitive headers, or game payloads.
+Do not log tunnel tokens, cookies unnecessarily, full sensitive headers, provider/workload identity credentials, metadata responses, or game payloads.
 
 Proposed companion artifacts:
 
@@ -482,9 +496,9 @@ Suggested incident sequence:
 
 Accepted for the initial friends-only mode:
 
-- trusted installed games rather than hostile tenants, while still containing ordinary game/runtime compromise away from Nexus control-plane authority;
+- trusted installed games rather than hostile tenants, while still containing ordinary game/runtime compromise away from Nexus control-plane and provider/host credential authority;
 - no mandatory containers;
-- ordinary public-internet egress;
+- ordinary public-internet egress, excluding provider/host-local credential and sensitive-control surfaces from the game context;
 - no mandatory player identity;
 - anyone with the stable URL can reach the public portal;
 - game-specific room privacy is game-owned;
@@ -518,6 +532,8 @@ Before production Cloudflare work, decide and document:
 
 This remains intentionally **undecided** until that discussion occurs.
 
+Separately, before advertising any cloud VM profile as supported, document its attached provider/workload identity (including `none`), metadata/credential/control-data surfaces, the isolation or no-credential mechanism used for the game context, and the runtime-context checks that prove the profile satisfies the deployment invariant in `docs/DEPLOYMENT-MODEL.md`.
+
 ## 15. Implementation sequence
 
 ### Phase A — existing R1
@@ -545,9 +561,9 @@ This remains intentionally **undecided** until that discussion occurs.
 15. Add admin CSRF/frame/Host protections.
 16. Add supported Unix-socket player ingress and verify permissions against the actual game-runtime identity.
 17. Establish VM CPU/RAM and game process limits.
-18. Separate `cloudflared`/Nexus/game privilege and credential visibility.
+18. Separate `cloudflared`/Nexus/game privilege and credential visibility; for cloud profiles, also isolate or neutralize provider/host metadata, workload-identity, credential-agent, and equivalent local credential/control-data paths from the game context.
 19. Configure Tailscale admin grants.
-20. Restrict unnecessary access to sensitive LAN/tailnet peers.
+20. Restrict unnecessary access to sensitive LAN/tailnet peers while retaining explicitly allowed ordinary public-internet egress.
 
 ### Phase D — public ingress
 
@@ -573,8 +589,8 @@ This remains intentionally **undecided** until that discussion occurs.
 34. Verify admin CSRF/Host behavior from hostile browser contexts.
 35. Verify HTTP framing, path, Host, header, and WS protections, including lowercase/mixed-case/encoded reserved-management path rejection.
 36. Verify IPv4/IPv6/LAN/tailnet boundaries.
-37. From the real game-runtime execution context, verify both trusted player ingress and the Nexus admin listener are unreachable while assigned game networking and allowed egress remain functional.
-38. Verify credential isolation and generic failure responses.
+37. From the real game-runtime execution context, verify trusted player ingress, the Nexus admin listener, and provider/host-local credential/control-data surfaces are unavailable or yield no usable credentials while assigned game networking and allowed public-internet egress remain functional.
+38. Verify `cloudflared`, provider/workload-identity, other credential isolation, and generic failure responses.
 39. Verify anomaly events and both kill switches.
 40. Create companion security/GRC artifacts.
 41. Declare remote play supported only after the acceptance gate passes.
@@ -588,7 +604,8 @@ This remains intentionally **undecided** until that discussion occurs.
 - [ ] Supported Linux ingress uses a protected Unix socket or a documented compensated exception.
 - [ ] From the actual game-runtime security identity/sandbox, opening the trusted player socket fails.
 - [ ] From the actual game-runtime security identity/sandbox, connecting to the Nexus admin listener/control plane fails.
-- [ ] Positive controls confirm Nexus can reach the assigned game listener, `cloudflared` can reach player ingress, intended Tailscale administration still works, and explicitly allowed game egress still works.
+- [ ] For a cloud-hosted profile, from the actual game-runtime identity/sandbox, every relevant provider/host metadata, workload/service-identity, credential-agent, bootstrap/control-data, or equivalent local endpoint form fails to yield usable credentials or sensitive control data. Coverage includes the profile's applicable IPv4, IPv6, DNS/hostname, loopback/link-local, redirect/proxy, local-agent/socket, and provider-specific aliases/transports.
+- [ ] Positive controls confirm Nexus can reach the assigned game listener, `cloudflared` can reach player ingress, intended Tailscale administration still works, and explicitly allowed ordinary public-internet egress from the game context still works after local credential isolation is applied.
 - [ ] Explicit Tailscale admin grants exist.
 - [ ] Sensitive LAN/unrelated tailnet reachability is restricted.
 - [ ] IPv4 and IPv6 boundaries are verified.
@@ -619,6 +636,7 @@ This remains intentionally **undecided** until that discussion occurs.
 - [ ] VM CPU/RAM and game process limits exist.
 - [ ] `cloudflared`, Nexus, and games have separated privilege/credential visibility.
 - [ ] Tunnel credentials are unreadable to Nexus/game processes.
+- [ ] For each supported cloud profile, attached provider/workload identity and metadata/credential posture are documented; if host services require such identity, its usable credentials/control data remain inaccessible to the game-runtime context.
 - [ ] Graceful/forced stop and crash-loop controls work.
 
 ### Players/monitoring
