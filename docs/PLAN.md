@@ -67,3 +67,21 @@ Before adapting the real games, promote the remaining deliberately selected stri
 - [ ] Add contribution guidance.
 - [ ] Document installation on Windows/Linux/macOS.
 - [ ] Define compatibility/versioning policy for future contract revisions.
+
+## R6 — Friends-only remote play support
+
+`docs/REMOTE-PLAY.md` is the detailed architecture and acceptance gate for this milestone. The roadmap items below group that work; they do not weaken or replace its support-gate requirements.
+
+- [ ] Separate private administration from public player ingress, with supported Linux player ingress using a protected Unix socket or a documented compensated exception.
+- [ ] Run supported remote game runtimes under a distinct security identity/sandbox from Nexus and deny the real game execution context access to trusted player ingress, the Nexus admin control plane, and provider/host credential or sensitive-control surfaces.
+- [ ] Establish VM and per-game resource limits, crash-loop controls, and the deployment-profile checks needed to prove the supported game sandbox retains required game networking while remaining isolated from local control authority.
+- [ ] Complete remote-player proxy hardening for canonical path/traversal handling, Host validation, forwarded-header/client attribution, HTTP framing and size/time/connection limits, WebSocket Origin/message/backpressure behavior, SSE cleanup, and generic failure responses.
+- [ ] Add explicit Tailscale admin grants plus admin Host, CSRF, frame, and audit protections.
+- [ ] Resolve the Cloudflare Tunnel credential model and document credential storage, ownership, rotation/revocation, and the external disable procedure before production public ingress.
+- [ ] Configure player-only Cloudflare ingress and verify that game ports and admin surfaces are not directly exposed to the public internet or unintended LAN paths over IPv4 or IPv6.
+- [ ] Add local and external public-ingress kill switches and restrict unnecessary game access to sensitive LAN/tailnet peers while preserving explicitly allowed ordinary public-internet egress.
+- [ ] Add expected-player configuration, approximate presence, route/IP/connection anomaly signals, structured warnings/events, and safe throttling without making presence cookies authoritative identity.
+- [ ] Add the stable HTTPS friend invite flow, including copy-link and QR actions, no-login joining, and configurable idle shutdown.
+- [ ] Verify representative secure-context/mobile-browser behavior, WSS/SSE and reconnect flows, Nexus-owned security headers, and service-worker containment.
+- [ ] Produce the security/operations companion documentation required for the supported deployment profile, including patch/update handling and any threat-model, hardening, monitoring, or incident-response artifacts needed by the final support gate.
+- [ ] Declare friends-only remote play supported only after every applicable `docs/REMOTE-PLAY.md` support-gate check passes for at least one documented deployment profile.
