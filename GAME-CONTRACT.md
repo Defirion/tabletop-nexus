@@ -63,11 +63,14 @@ Nexus launches the declared command with the game repository as the working dire
 - `HOST`: Nexus-selected private bind host;
 - `PORT`: Nexus-selected private port;
 - `BASE_PATH`: canonical public route assigned to the game, `/games/<game-id>`, without a trailing slash;
-- `NEXUS_LAUNCH_TOKEN`: opaque unpredictable value generated separately for each launch and used only to associate the private readiness response with that launched runtime.
+- `NEXUS_LAUNCH_TOKEN`: opaque unpredictable value generated separately for each launch and used only to associate the private readiness response with that launched runtime;
+- `NEXUS_LIFECYCLE_TOKEN`: opaque launcher-owned per-launch value used only by the same-identity Linux lifecycle boundary to distinguish runtime-owned descendants from a later process group that reuses the same numeric identifier.
 
 The runtime must bind its browser-facing listener to the exact supplied `HOST` and `PORT`. It must not widen the bind to `0.0.0.0`, `::`, or another interface in Nexus mode. If the assigned bind cannot be satisfied, startup must fail rather than choosing another address or fixed port.
 
 `NEXUS_LAUNCH_TOKEN` is not game/session identity and is not authorization for player actions. The runtime must keep it on the private Nexus management seam and echo it only in the readiness payload described below. Nexus does not send the expected token in its readiness request, so a different process that merely wins the assigned port cannot satisfy readiness by reflecting request data.
+
+`NEXUS_LIFECYCLE_TOKEN` is likewise not game/session identity or authorization. Games do not interpret or expose it. Runtime-owned helpers must inherit it unchanged while they remain part of the launcher-owned runtime; replacing a helper's environment must preserve this value. Nexus uses it only as local lifecycle-generation evidence after the Linux process-group controller has exited.
 
 ### Base-path behavior
 
@@ -77,7 +80,7 @@ Nexus may strip the public game prefix while proxying requests, but the browser-
 
 ## One-process LAN runtime
 
-The launch command must produce one self-contained game runtime from Nexus's perspective: one Nexus-owned lifecycle boundary and one private browser-facing HTTP port. The root process may use helpers internally, but every runtime-owned descendant must remain inside the lifecycle boundary owned by the launcher. A runtime must not daemonize, create a new session/process group, or otherwise move helpers outside that boundary while they retain Nexus-assigned runtime state or resources.
+The launch command must produce one self-contained game runtime from Nexus's perspective: one Nexus-owned lifecycle boundary and one private browser-facing HTTP port. The root process may use helpers internally, but every runtime-owned descendant must remain inside the lifecycle boundary owned by the launcher and inherit the launcher-owned `NEXUS_LIFECYCLE_TOKEN` unchanged. A runtime must not daemonize, create a new session/process group, strip that lifecycle marker from a runtime-owned helper, or otherwise move helpers outside the boundary while they retain Nexus-assigned runtime state or resources.
 
 The runtime is responsible for serving its frontend and browser-facing HTTP/WebSocket/SSE endpoints. Development servers are not part of the runtime contract.
 
@@ -134,6 +137,8 @@ If Nexus needs game-specific branches to understand those concepts, the integrat
 
 Nexus supervises one active game runtime initially. Starting another game stops the current runtime and releases its process/port resources before the replacement is launched.
 
-On Linux, the local launcher places the supervised runtime in its own process group. Nexus sends graceful `SIGTERM` and forced `SIGKILL` to that runtime group rather than treating the manifest-launched root PID as the whole runtime. Completion is not reported, and the private-port lease is not released, while a live runtime-owned group member remains. If the root process exits unexpectedly while descendants survive, Nexus cleans up the remaining group before treating the runtime as terminated.
+On Linux, the local launcher starts a small Nexus-owned controller as the leader of a dedicated process group/session, then launches the manifest-declared root inside that anchored group. Normal runtime-owned helpers inherit the same group. Graceful and forced group signals are requested through that controller, so the destructive group-signal syscall originates from a process that is itself still in the owned group; a recycled numeric process-group ID therefore cannot redirect that signal to an unrelated generation. The controller deliberately survives `SIGTERM` while Nexus checks for remaining runtime members and exits only after graceful completion, or is terminated with the group by forced `SIGKILL`.
 
-Games should handle `SIGTERM` by closing their listener/helpers and releasing the assigned port promptly. Runtime-owned helpers must remain in the launcher-owned lifecycle boundary until they exit. Nexus treats unexpected complete-runtime exit as a failed lifecycle state and releases the associated port lease only after termination is established.
+While the controller is alive, its presence keeps the numeric process-group ID allocated and Nexus may inspect the group directly. After the controller exits, Nexus uses the per-launch `NEXUS_LIFECYCLE_TOKEN` inherited by runtime-owned descendants to distinguish that launch generation from any unrelated process group that later reuses the same number. Completion is not reported, and the private-port lease is not released, while a live process from the owned generation remains. If the manifest root exits unexpectedly while descendants survive, the controller cleans the residual group before Nexus treats the runtime as terminated. If the controller itself disappears unexpectedly, Nexus does not send a later numeric group signal; ownership remains tied only to descendants that can still be associated with the launch generation.
+
+Games should handle `SIGTERM` by closing their listener/helpers and releasing the assigned port promptly. Runtime-owned helpers must remain in the launcher-owned lifecycle boundary, preserve `NEXUS_LIFECYCLE_TOKEN`, and exit with that runtime. Nexus treats unexpected complete-runtime exit as a failed lifecycle state and releases the associated port lease only after termination is established.

@@ -1,5 +1,7 @@
 import { spawn as nodeSpawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 export const GAME_LAUNCH_SECURITY_BOUNDARY = Object.freeze({
   SAME_OS_IDENTITY: "same-os-identity",
@@ -7,6 +9,8 @@ export const GAME_LAUNCH_SECURITY_BOUNDARY = Object.freeze({
 });
 
 const PROCESS_GROUP_POLL_MS = 20;
+const LIFECYCLE_TOKEN_ENV = "NEXUS_LIFECYCLE_TOKEN";
+const PROCESS_GROUP_HOST_PATH = fileURLToPath(new URL("./process-group-host.mjs", import.meta.url));
 
 function assertLaunchableGame(game) {
   if (game === null || typeof game !== "object") {
@@ -99,10 +103,79 @@ function createProcessGroupInspectionError(cause) {
   return error;
 }
 
-function linuxProcessGroupHasLiveMembers(processGroupId) {
+function createProcessGroupControllerError(cause) {
+  const detail = cause instanceof Error ? `: ${cause.message}` : "";
+  const error = new Error(
+    `game process-group controller exited before runtime termination was established${detail}`,
+    cause === undefined ? undefined : { cause },
+  );
+  error.code = "GAME_PROCESS_GROUP_CONTROLLER_EXITED";
+  return error;
+}
+
+function deserializeError(value) {
+  if (value === null || typeof value !== "object") {
+    return value === null ? null : new Error(String(value));
+  }
+  const error = new Error(typeof value.message === "string" ? value.message : "game process error");
+  if (typeof value.code === "string") {
+    error.code = value.code;
+  }
+  return error;
+}
+
+function readLinuxProcessMetadata(entry, readProcFile) {
+  let stat;
+  try {
+    stat = readProcFile(`/proc/${entry}/stat`, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ESRCH") {
+      return null;
+    }
+    throw createProcessGroupInspectionError(error);
+  }
+
+  const endName = stat.lastIndexOf(")");
+  if (endName < 0) {
+    throw createProcessGroupInspectionError(
+      new Error(`malformed /proc/${entry}/stat process name`),
+    );
+  }
+  const fields = stat.slice(endName + 2).trim().split(/\s+/);
+  const state = fields[0];
+  const processGroup = Number(fields[2]);
+  if (typeof state !== "string" || state.length === 0 || !Number.isInteger(processGroup)) {
+    throw createProcessGroupInspectionError(
+      new Error(`malformed /proc/${entry}/stat process metadata`),
+    );
+  }
+
+  return { pid: Number(entry), state, processGroup };
+}
+
+function processHasLifecycleToken(pid, lifecycleToken, readProcFile) {
+  let environment;
+  try {
+    environment = readProcFile(`/proc/${pid}/environ`, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ESRCH") {
+      return false;
+    }
+    throw createProcessGroupInspectionError(error);
+  }
+
+  const expected = `${LIFECYCLE_TOKEN_ENV}=${lifecycleToken}`;
+  return environment.split("\0").includes(expected);
+}
+
+function linuxProcessGroupHasLiveMembers(
+  processGroup,
+  { readdirProc, readProcFile },
+  { excludeController = false, ownedOnly = false } = {},
+) {
   let entries;
   try {
-    entries = readdirSync("/proc");
+    entries = readdirProc("/proc");
   } catch (error) {
     throw createProcessGroupInspectionError(error);
   }
@@ -112,49 +185,43 @@ function linuxProcessGroupHasLiveMembers(processGroupId) {
       continue;
     }
 
-    let stat;
-    try {
-      stat = readFileSync(`/proc/${entry}/stat`, "utf8");
-    } catch (error) {
-      if (error?.code === "ENOENT" || error?.code === "ESRCH") {
-        continue;
-      }
-      throw createProcessGroupInspectionError(error);
+    const metadata = readLinuxProcessMetadata(entry, readProcFile);
+    if (metadata === null) {
+      continue;
+    }
+    if (
+      metadata.processGroup !== processGroup.id ||
+      (excludeController && metadata.pid === processGroup.controllerPid) ||
+      metadata.state === "Z" ||
+      metadata.state === "X"
+    ) {
+      continue;
     }
 
-    const endName = stat.lastIndexOf(")");
-    if (endName < 0) {
-      throw createProcessGroupInspectionError(
-        new Error(`malformed /proc/${entry}/stat process name`),
-      );
+    if (ownedOnly && !processHasLifecycleToken(metadata.pid, processGroup.lifecycleToken, readProcFile)) {
+      continue;
     }
-    const fields = stat.slice(endName + 2).trim().split(/\s+/);
-    const state = fields[0];
-    const processGroup = Number(fields[2]);
-    if (typeof state !== "string" || state.length === 0 || !Number.isInteger(processGroup)) {
-      throw createProcessGroupInspectionError(
-        new Error(`malformed /proc/${entry}/stat process metadata`),
-      );
-    }
-
-    // Zombies have already relinquished listeners and other runtime resources;
-    // waiting for their eventual parent reaping would turn graceful shutdown into
-    // a false forced-stop result without strengthening the ownership boundary.
-    if (processGroup === processGroupId && state !== "Z" && state !== "X") {
-      return true;
-    }
+    return true;
   }
 
   return false;
 }
 
-function defaultProcessGroupExists(processGroupId, processKill) {
+function defaultProcessGroupExists(
+  processGroup,
+  { processKill, readdirProc, readProcFile },
+  options = {},
+) {
   if (process.platform === "linux") {
-    return linuxProcessGroupHasLiveMembers(processGroupId);
+    return linuxProcessGroupHasLiveMembers(
+      processGroup,
+      { readdirProc, readProcFile },
+      options,
+    );
   }
 
   try {
-    processKill(-processGroupId, 0);
+    processKill(-processGroup.id, 0);
     return true;
   } catch (error) {
     if (error?.code === "ESRCH") {
@@ -171,59 +238,32 @@ function delay(ms, setTimeoutFn) {
   return new Promise((resolve) => setTimeoutFn(resolve, ms));
 }
 
-async function waitForProcessGroupExit(processGroupId, { processKill, setTimeoutFn }) {
+async function waitForOwnedProcessGroupExit(processGroup, dependencies) {
   while (true) {
     try {
-      if (!defaultProcessGroupExists(processGroupId, processKill)) {
+      if (!defaultProcessGroupExists(processGroup, dependencies, { ownedOnly: true })) {
         return;
       }
     } catch {
-      // An inspection failure is not evidence that the runtime is gone. Retain
-      // ownership and retry until group termination can actually be established.
+      // Inspection uncertainty is not exit evidence. Retain ownership until the
+      // exact launch generation can be established as absent.
     }
-    await delay(PROCESS_GROUP_POLL_MS, setTimeoutFn);
+    await delay(PROCESS_GROUP_POLL_MS, dependencies.setTimeoutFn);
   }
 }
 
-async function cleanUnexpectedProcessGroup(
-  processGroupId,
-  control,
-  { processKill, setTimeoutFn },
-) {
-  let cleanupError = null;
-
-  // The manifest-launched root is required to remain attached to the runtime.
-  // If it exits without a requested stop, any surviving group members are orphaned
-  // runtime residue and must be terminated before waitForExit can settle.
-  while (!control.stopRequested) {
-    let live;
+async function waitForHostedRuntimeMembersExit(processGroup, dependencies) {
+  while (true) {
     try {
-      live = defaultProcessGroupExists(processGroupId, processKill);
-    } catch {
-      await delay(PROCESS_GROUP_POLL_MS, setTimeoutFn);
-      continue;
-    }
-    if (!live) {
-      return cleanupError;
-    }
-
-    try {
-      processKill(-processGroupId, "SIGKILL");
-      break;
-    } catch (error) {
-      if (error?.code === "ESRCH") {
-        break;
+      if (!defaultProcessGroupExists(processGroup, dependencies, { excludeController: true })) {
+        return;
       }
-      cleanupError ??= createSignalDeliveryError("SIGKILL", error);
-      await delay(PROCESS_GROUP_POLL_MS, setTimeoutFn);
+    } catch {
+      // While the controller is alive its group id is still anchored, but an
+      // inspection failure still cannot certify that the runtime members exited.
     }
+    await delay(PROCESS_GROUP_POLL_MS, dependencies.setTimeoutFn);
   }
-
-  await waitForProcessGroupExit(processGroupId, {
-    processKill,
-    setTimeoutFn,
-  });
-  return cleanupError;
 }
 
 function sendRootSignal(child, signal) {
@@ -248,55 +288,227 @@ function sendRootSignal(child, signal) {
   throw createSignalDeliveryError(signal);
 }
 
-function sendSignal(child, processGroupId, signal, processKill) {
-  if (processGroupId === null) {
-    return sendRootSignal(child, signal);
-  }
-
-  try {
-    processKill(-processGroupId, signal);
-    return true;
-  } catch (error) {
-    if (error?.code !== "ESRCH") {
-      throw createSignalDeliveryError(signal, error);
-    }
-  }
-
-  // A real detached Unix root is its process-group leader, so a live root with
-  // no matching group is an anomalous/fake-handle case. Falling back to the root
-  // keeps that case fail-closed without delivering every normal signal twice.
-  return sendRootSignal(child, signal);
-}
-
-function trackRuntimeExit(
-  child,
-  { processGroupId, control, processKill, setTimeoutFn },
-) {
+function trackDirectRuntimeExit(child) {
   return new Promise((resolve) => {
     let spawnError = null;
     const onError = (error) => {
-      // ChildProcess 'error' also covers failed kill/message operations after a
-      // successful spawn. Those are lifecycle errors, not proof of termination.
-      // A missing pid is the Node-documented spawn-failure case; 'close' still
-      // follows and is the definitive point at which no root child remains alive.
       if (child.pid === undefined && spawnError === null) {
         spawnError = error;
       }
     };
 
     child.on("error", onError);
-    child.once("close", async (code, signal) => {
+    child.once("close", (code, signal) => {
       child.off("error", onError);
-      let cleanupError = null;
-      if (processGroupId !== null) {
-        cleanupError = await cleanUnexpectedProcessGroup(processGroupId, control, {
-          processKill,
-          setTimeoutFn,
-        });
-      }
-      resolve(Object.freeze({ code, signal, error: spawnError ?? cleanupError }));
+      resolve(Object.freeze({ code, signal, error: spawnError }));
     });
   });
+}
+
+function createHostedRuntime(
+  child,
+  processGroup,
+  dependencies,
+  beforeGroupSignal,
+  injectedGroupSignal,
+) {
+  let resolveExit;
+  let settled = false;
+  let rootExit = null;
+  let controllerSpawnError = null;
+  let cleanupError = null;
+  let controllerClosed = false;
+  let controllerClose = null;
+  let controllerExitExpected = false;
+  let requestId = 0;
+  let operation = Promise.resolve();
+  const control = { stopRequested: false };
+
+  const exit = new Promise((resolve) => {
+    resolveExit = resolve;
+  });
+
+  function settle(result) {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    resolveExit(Object.freeze(result));
+  }
+
+  async function finalizeAfterControllerClose() {
+    await waitForOwnedProcessGroupExit(processGroup, dependencies);
+    const fallbackError = rootExit === null && cleanupError === null && !controllerExitExpected
+      ? createProcessGroupControllerError(controllerSpawnError)
+      : null;
+    settle({
+      code: rootExit !== null ? rootExit.code : (controllerClose?.code ?? null),
+      signal: rootExit !== null ? rootExit.signal : (controllerClose?.signal ?? null),
+      error: rootExit?.error ?? cleanupError ?? fallbackError,
+    });
+  }
+
+  function queueOperation(action) {
+    const queued = operation.then(action, action);
+    operation = queued.catch(() => undefined);
+    return queued;
+  }
+
+  function sendMessage(message) {
+    return new Promise((resolve, reject) => {
+      if (controllerClosed || typeof child.send !== "function" || child.connected === false) {
+        reject(createProcessGroupControllerError());
+        return;
+      }
+      child.send(message, (error) => {
+        if (error) {
+          reject(createProcessGroupControllerError(error));
+          return;
+        }
+        resolve();
+      });
+    });
+  }
+
+  function requestGroupSignal(signal) {
+    return new Promise(async (resolve, reject) => {
+      try {
+        await beforeGroupSignal(signal);
+        if (injectedGroupSignal !== null) {
+          injectedGroupSignal(-processGroup.id, signal);
+          if (signal === "SIGKILL") {
+            controllerExitExpected = true;
+          }
+          resolve(true);
+          return;
+        }
+      } catch (error) {
+        reject(createSignalDeliveryError(signal, error));
+        return;
+      }
+
+      if (controllerClosed) {
+        reject(createSignalDeliveryError(signal, createProcessGroupControllerError()));
+        return;
+      }
+
+      const currentRequestId = ++requestId;
+      const onMessage = (message) => {
+        if (
+          message === null ||
+          typeof message !== "object" ||
+          message.type !== "signal-result" ||
+          message.requestId !== currentRequestId
+        ) {
+          return;
+        }
+        child.off("message", onMessage);
+        child.off("close", onClose);
+        if (message.ok === true) {
+          if (signal === "SIGKILL") {
+            controllerExitExpected = true;
+          }
+          resolve(true);
+          return;
+        }
+        reject(createSignalDeliveryError(signal, deserializeError(message.error)));
+      };
+      const onClose = () => {
+        child.off("message", onMessage);
+        if (signal === "SIGKILL") {
+          controllerExitExpected = true;
+          resolve(true);
+        } else {
+          reject(createSignalDeliveryError(signal, createProcessGroupControllerError()));
+        }
+      };
+
+      child.on("message", onMessage);
+      child.once("close", onClose);
+      try {
+        await sendMessage({ type: "signal", signal, requestId: currentRequestId });
+      } catch (error) {
+        child.off("message", onMessage);
+        child.off("close", onClose);
+        reject(createSignalDeliveryError(signal, error));
+      }
+    });
+  }
+
+  async function releaseController() {
+    if (controllerClosed) {
+      return;
+    }
+    controllerExitExpected = true;
+    try {
+      await sendMessage({ type: "release" });
+    } catch (error) {
+      controllerExitExpected = false;
+      throw error;
+    }
+  }
+
+  async function cleanUnexpectedRuntime() {
+    await queueOperation(async () => {
+      while (!control.stopRequested && !controllerClosed) {
+        let live;
+        try {
+          live = defaultProcessGroupExists(processGroup, dependencies, { excludeController: true });
+        } catch {
+          await delay(PROCESS_GROUP_POLL_MS, dependencies.setTimeoutFn);
+          continue;
+        }
+
+        if (!live) {
+          await releaseController();
+          return;
+        }
+
+        try {
+          await requestGroupSignal("SIGKILL");
+          return;
+        } catch (error) {
+          cleanupError ??= error;
+          await delay(PROCESS_GROUP_POLL_MS, dependencies.setTimeoutFn);
+        }
+      }
+    });
+  }
+
+  child.on("error", (error) => {
+    if (child.pid === undefined && controllerSpawnError === null) {
+      controllerSpawnError = error;
+    }
+  });
+  child.on("message", (message) => {
+    if (message?.type !== "root-exit" || rootExit !== null) {
+      return;
+    }
+    rootExit = {
+      code: message.code ?? null,
+      signal: message.signal ?? null,
+      error: deserializeError(message.error),
+    };
+    if (!control.stopRequested) {
+      void cleanUnexpectedRuntime();
+    }
+  });
+  child.once("close", (code, signal) => {
+    controllerClosed = true;
+    controllerClose = { code, signal };
+    void finalizeAfterControllerClose();
+  });
+
+  return {
+    exit,
+    processGroup,
+    control,
+    get rootExit() { return rootExit; },
+    queueOperation,
+    requestGroupSignal,
+    releaseController,
+    waitForMembersExit: () => waitForHostedRuntimeMembersExit(processGroup, dependencies),
+  };
 }
 
 function createLocalProcessLauncher({
@@ -307,6 +519,10 @@ function createLocalProcessLauncher({
   processKill,
   setTimeoutFn,
   clearTimeoutFn,
+  readdirProc,
+  readProcFile,
+  createLifecycleToken,
+  beforeGroupSignal,
 }) {
   if (typeof spawn !== "function") {
     throw new TypeError("spawn must be a function");
@@ -320,41 +536,82 @@ function createLocalProcessLauncher({
   if (typeof setTimeoutFn !== "function" || typeof clearTimeoutFn !== "function") {
     throw new TypeError("timer functions must be functions");
   }
+  if (typeof readdirProc !== "function" || typeof readProcFile !== "function") {
+    throw new TypeError("procfs functions must be functions");
+  }
+  if (typeof createLifecycleToken !== "function" || typeof beforeGroupSignal !== "function") {
+    throw new TypeError("lifecycle hooks must be functions");
+  }
 
   const runtimes = new WeakMap();
+  const dependencies = {
+    processKill,
+    setTimeoutFn,
+    clearTimeoutFn,
+    readdirProc,
+    readProcFile,
+  };
 
   return Object.freeze({
     securityBoundary: GAME_LAUNCH_SECURITY_BOUNDARY.SAME_OS_IDENTITY,
     launch(spec) {
-      const spawnOptions = {
+      if (ownProcessGroup) {
+        const lifecycleToken = createLifecycleToken();
+        if (typeof lifecycleToken !== "string" || lifecycleToken.length === 0) {
+          throw new TypeError("createLifecycleToken must return a non-empty string");
+        }
+        const environment = {
+          ...parentEnv,
+          ...spec.environment,
+          [LIFECYCLE_TOKEN_ENV]: lifecycleToken,
+        };
+        const hostSpec = JSON.stringify({
+          command: spec.command,
+          args: [...spec.args],
+          cwd: spec.cwd,
+        });
+        const child = spawn(process.execPath, [PROCESS_GROUP_HOST_PATH, hostSpec], {
+          cwd: spec.cwd,
+          shell: false,
+          env: environment,
+          stdio: ["ignore", "ignore", "ignore", "ipc"],
+          detached: true,
+        });
+        const processGroup = Number.isInteger(child.pid)
+          ? Object.freeze({
+            id: child.pid,
+            controllerPid: child.pid,
+            lifecycleToken,
+          })
+          : null;
+        if (processGroup === null) {
+          const exit = trackDirectRuntimeExit(child);
+          runtimes.set(child, { exit, processGroup: null, control: { stopRequested: false } });
+        } else {
+          runtimes.set(
+            child,
+            createHostedRuntime(
+              child,
+              processGroup,
+              dependencies,
+              beforeGroupSignal,
+              processKill === process.kill ? null : processKill,
+            ),
+          );
+        }
+        return child;
+      }
+
+      const child = spawn(spec.command, [...spec.args], {
         cwd: spec.cwd,
         shell: false,
         env: { ...parentEnv, ...spec.environment },
-        // Supervisor launchers never leave hidden stdout/stderr pipes with no
-        // consumer. The direct helper uses the private capturing variant below
-        // because it returns the ChildProcess to the caller that owns the pipes.
         stdio: captureOutput
           ? ["ignore", "pipe", "pipe"]
           : ["ignore", "ignore", "ignore"],
-      };
-      if (ownProcessGroup) {
-        // On Unix, detached children become leaders of a new process group/session.
-        // The supervised launcher owns that group so ordinary runtime descendants
-        // cannot outlive the root and retain Nexus-assigned resources unnoticed.
-        spawnOptions.detached = true;
-      }
-      const child = spawn(spec.command, [...spec.args], spawnOptions);
-      const processGroupId = ownProcessGroup && Number.isInteger(child.pid)
-        ? child.pid
-        : null;
-      const control = { stopRequested: false };
-      const exit = trackRuntimeExit(child, {
-        processGroupId,
-        control,
-        processKill,
-        setTimeoutFn,
       });
-      runtimes.set(child, { exit, processGroupId, control });
+      const exit = trackDirectRuntimeExit(child);
+      runtimes.set(child, { exit, processGroup: null, control: { stopRequested: false } });
       return child;
     },
     waitForExit(child) {
@@ -371,36 +628,68 @@ function createLocalProcessLauncher({
         throw new TypeError("unknown local game process handle");
       }
 
-      const { exit, processGroupId, control } = runtime;
-      control.stopRequested = true;
+      runtime.control.stopRequested = true;
+      if (runtime.processGroup === null) {
+        if (childHasExited(child)) {
+          return Object.freeze({ ...(await runtime.exit), forced: false });
+        }
 
-      const runtimeAlive = !childHasExited(child) || (
-        processGroupId !== null && defaultProcessGroupExists(processGroupId, processKill)
-      );
-      if (!runtimeAlive) {
-        return Object.freeze({ ...(await exit), forced: false });
+        const gracefulSignalDelivered = sendRootSignal(child, "SIGTERM");
+        if (!gracefulSignalDelivered) {
+          return Object.freeze({ ...(await runtime.exit), forced: false });
+        }
+
+        let timeoutId;
+        const gracefulTimeout = new Promise((resolve) => {
+          timeoutId = setTimeoutFn(() => resolve(null), gracePeriodMs);
+        });
+        const gracefulExit = await Promise.race([runtime.exit, gracefulTimeout]);
+        if (gracefulExit !== null) {
+          clearTimeoutFn(timeoutId);
+          return Object.freeze({ ...gracefulExit, forced: false });
+        }
+
+        const forcedSignalDelivered = sendRootSignal(child, "SIGKILL");
+        if (!forcedSignalDelivered) {
+          return Object.freeze({ ...(await runtime.exit), forced: false });
+        }
+        return Object.freeze({ ...(await runtime.exit), forced: true });
       }
 
-      const gracefulSignalDelivered = sendSignal(child, processGroupId, "SIGTERM", processKill);
-      if (!gracefulSignalDelivered) {
-        return Object.freeze({ ...(await exit), forced: false });
-      }
+      return runtime.queueOperation(async () => {
+        if (childHasExited(child)) {
+          return Object.freeze({ ...(await runtime.exit), forced: false });
+        }
 
-      let timeoutId;
-      const gracefulTimeout = new Promise((resolve) => {
-        timeoutId = setTimeoutFn(() => resolve(null), gracePeriodMs);
+        const live = defaultProcessGroupExists(runtime.processGroup, dependencies, {
+          excludeController: true,
+        });
+        if (!live) {
+          await runtime.releaseController();
+          return Object.freeze({ ...(await runtime.exit), forced: false });
+        }
+
+        if (runtime.rootExit !== null) {
+          await runtime.requestGroupSignal("SIGKILL");
+          return Object.freeze({ ...(await runtime.exit), forced: true });
+        }
+
+        await runtime.requestGroupSignal("SIGTERM");
+        let timeoutId;
+        const gracefulTimeout = new Promise((resolve) => {
+          timeoutId = setTimeoutFn(() => resolve(false), gracePeriodMs);
+        });
+        const gracefulExit = runtime.waitForMembersExit().then(() => true);
+        const graceful = await Promise.race([gracefulExit, gracefulTimeout]);
+        if (graceful) {
+          clearTimeoutFn(timeoutId);
+          await runtime.releaseController();
+          return Object.freeze({ ...(await runtime.exit), forced: false });
+        }
+
+        await runtime.requestGroupSignal("SIGKILL");
+        return Object.freeze({ ...(await runtime.exit), forced: true });
       });
-      const gracefulExit = await Promise.race([exit, gracefulTimeout]);
-      if (gracefulExit !== null) {
-        clearTimeoutFn(timeoutId);
-        return Object.freeze({ ...gracefulExit, forced: false });
-      }
-
-      const forcedSignalDelivered = sendSignal(child, processGroupId, "SIGKILL", processKill);
-      if (!forcedSignalDelivered) {
-        return Object.freeze({ ...(await exit), forced: false });
-      }
-      return Object.freeze({ ...(await exit), forced: true });
     },
   });
 }
@@ -411,15 +700,24 @@ export function createLocalGameProcessLauncher({
   processKill = process.kill,
   setTimeoutFn = setTimeout,
   clearTimeoutFn = clearTimeout,
+  readdirProc = readdirSync,
+  readProcFile = readFileSync,
+  createLifecycleToken = () => randomBytes(32).toString("hex"),
+  beforeGroupSignal = () => undefined,
+  ownProcessGroup = process.platform === "linux" && (spawn === nodeSpawn || processKill !== process.kill),
 } = {}) {
   return createLocalProcessLauncher({
     spawn,
     parentEnv,
     captureOutput: false,
-    ownProcessGroup: process.platform !== "win32",
+    ownProcessGroup,
     processKill,
     setTimeoutFn,
     clearTimeoutFn,
+    readdirProc,
+    readProcFile,
+    createLifecycleToken,
+    beforeGroupSignal,
   });
 }
 
@@ -493,6 +791,10 @@ export function launchLocalGameProcess(
       processKill: process.kill,
       setTimeoutFn: setTimeout,
       clearTimeoutFn: clearTimeout,
+      readdirProc: readdirSync,
+      readProcFile: readFileSync,
+      createLifecycleToken: () => randomBytes(32).toString("hex"),
+      beforeGroupSignal: () => undefined,
     }),
     environment,
   });

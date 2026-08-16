@@ -70,6 +70,7 @@ test("canonical verifier requires R1 runtime sources and focused regression cove
     assert.match(requiredMatch[1], new RegExp(`'${path.replaceAll("/", "\\/").replaceAll(".", "\\.")}'`));
   }
   assert.match(productVerifier, /\["--check", "src\/runtime\/process-launcher\.js"\]/);
+  assert.match(productVerifier, /\["--check", "src\/runtime\/process-group-host\.mjs"\]/);
   assert.match(productVerifier, /\["--check", "src\/runtime\/readiness\.js"\]/);
   assert.match(productVerifier, /\["--check", "src\/runtime\/supervisor\.js"\]/);
   assert.match(productVerifier, /\["--check", "fixtures\/runtime-game\/server\.mjs"\]/);

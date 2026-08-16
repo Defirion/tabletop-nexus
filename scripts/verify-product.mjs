@@ -42,6 +42,7 @@ const checks = [
   ["--check", "src/registry.js"],
   ["--check", "src/runtime/private-ports.js"],
   ["--check", "src/runtime/process-launcher.js"],
+  ["--check", "src/runtime/process-group-host.mjs"],
   ["--check", "src/runtime/readiness.js"],
   ["--check", "src/runtime/supervisor.js"],
   ["--check", "fixtures/runtime-game/server.mjs"],
