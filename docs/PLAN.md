@@ -1,6 +1,6 @@
 # Plan
 
-GitHub PR state is the operational source of truth. Checkboxes describe implementation present on the branch containing this document; merge-readiness is decided only by the independent Verifier/Reviewer workflow in `AGENTS.md`.
+Checkboxes describe implementation present on the branch containing this document. Update them when the corresponding product behavior and regression coverage land.
 
 ## R0 — Platform baseline
 
@@ -9,7 +9,7 @@ GitHub PR state is the operational source of truth. Checkboxes describe implemen
 - [x] Make TV-less play mandatory for compatible games.
 - [x] Add a runnable portal/API scaffold.
 - [x] Add local configuration discovery and manifest validation.
-- [x] Merge scaffold after independent verification and review.
+- [x] Verify the scaffold with automated product checks.
 
 ## R1 — Runtime supervisor
 

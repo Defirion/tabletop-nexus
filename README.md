@@ -81,23 +81,13 @@ Relative game paths are resolved from the config file's directory. The local con
 
 ## Verification
 
-Focused product checks:
+Run the repository's syntax checks and test suite:
 
 ```bash
-npm run verify:local
+npm run verify
 ```
 
-Canonical repository verification remains:
-
-```powershell
-pwsh -NoProfile -File .\verify.ps1
-```
-
-The canonical verifier runs the product checks in addition to the Agent-Workflow scaffold checks. See [`VERIFICATION.md`](VERIFICATION.md).
-
-## AI-assisted development workflow
-
-GitHub is the shared state between independent Implementer, Verifier, and Reviewer runs. Start with [`AGENTS.md`](AGENTS.md).
+There are no package dependencies to install at this stage. Repository development guidance and the security invariants that changes must preserve are summarized in [`AGENTS.md`](AGENTS.md); the product architecture documents remain authoritative.
 
 ## Licensing
 
