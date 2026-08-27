@@ -360,6 +360,36 @@ test("RuntimeSupervisor stops and releases the active game before starting anoth
   }
 });
 
+test("RuntimeSupervisor retains a runtime lease while a proxy connection setup holds it", async () => {
+  const recording = createRecordingAllocator();
+  const supervisor = new RuntimeSupervisor({
+    allocator: recording.allocator,
+    startupTimeoutMs: 2_000,
+    pollIntervalMs: 20,
+    requestTimeoutMs: 100,
+    stopGracePeriodMs: 500,
+  });
+  const firstGame = fixtureGame("leased-game-a");
+
+  try {
+    await supervisor.start(firstGame);
+    const heldRuntime = supervisor.acquireActiveRuntime(firstGame);
+    assert.ok(heldRuntime);
+
+    const replacement = supervisor.start(fixtureGame("leased-game-b"));
+    await waitUntil(() => supervisor.getState("leased-game-a").status === "stopping");
+    assert.equal(recording.allocations.length, 1);
+    assert.equal(recording.allocations[0].released, false);
+
+    heldRuntime.release();
+    await replacement;
+    assert.equal(recording.allocations.length, 2);
+    assert.equal(recording.allocations[0].released, true);
+  } finally {
+    await supervisor.stop().catch(() => undefined);
+  }
+});
+
 test("RuntimeSupervisor retains the lease and blocks replacement allocation when signal delivery fails until definitive exit", async () => {
   const recording = createRecordingAllocator();
   const signalFailure = createFirstProcessSignalFailureLauncher();

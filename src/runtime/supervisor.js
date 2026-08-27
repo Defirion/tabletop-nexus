@@ -48,6 +48,25 @@ function createLaunchToken(factory) {
   return launchToken;
 }
 
+function stableManifestSignature(value) {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableManifestSignature).join(",")}]`;
+  }
+  return `{${Object.keys(value).sort().map((key) => (
+    `${JSON.stringify(key)}:${stableManifestSignature(value[key])}`
+  )).join(",")}}`;
+}
+
+function installedGameIdentity(game) {
+  if (typeof game.root !== "string" || game.root.length === 0) {
+    throw new TypeError("game.root must be a non-empty string");
+  }
+  return `${game.root}\u0000${stableManifestSignature(game.manifest)}`;
+}
+
 export class RuntimeSupervisor {
   #allocator;
   #launcher;
@@ -125,6 +144,32 @@ export class RuntimeSupervisor {
     });
   }
 
+  acquireActiveRuntime(game) {
+    assertInstalledGame(game);
+    const record = this.#active;
+    if (
+      record === null
+      || record.status !== GAME_LIFECYCLE_STATUS.RUNNING
+      || record.identity !== installedGameIdentity(game)
+    ) {
+      return null;
+    }
+
+    record.proxyReferences += 1;
+    let released = false;
+    return Object.freeze({
+      gameId: record.gameId,
+      host: record.lease.host,
+      port: record.lease.port,
+      release: () => {
+        if (!released) {
+          released = true;
+          this.#releaseProxyReference(record);
+        }
+      },
+    });
+  }
+
   start(game) {
     assertInstalledGame(game);
     return this.#enqueue(() => this.#start(game));
@@ -176,6 +221,7 @@ export class RuntimeSupervisor {
       const exitPromise = execution.waitForExit();
       record = {
         gameId,
+        identity: installedGameIdentity(game),
         lease,
         execution,
         exitPromise,
@@ -183,6 +229,8 @@ export class RuntimeSupervisor {
         basePath,
         status: GAME_LIFECYCLE_STATUS.STARTING,
         released: false,
+        proxyReferences: 0,
+        resolveProxyReferences: null,
       };
       this.#active = record;
 
@@ -238,6 +286,7 @@ export class RuntimeSupervisor {
     }
 
     this.#setState(record.gameId, GAME_LIFECYCLE_STATUS.STOPPING);
+    await this.#waitForProxyReferences(record);
 
     let stopResult;
     try {
@@ -268,12 +317,30 @@ export class RuntimeSupervisor {
     }
   }
 
-  #handleDefinitiveExit(record, exit) {
+  #releaseProxyReference(record) {
+    record.proxyReferences -= 1;
+    if (record.proxyReferences === 0) {
+      record.resolveProxyReferences?.();
+      record.resolveProxyReferences = null;
+    }
+  }
+
+  async #waitForProxyReferences(record) {
+    if (record.proxyReferences === 0) {
+      return;
+    }
+    await new Promise((resolve) => {
+      record.resolveProxyReferences = resolve;
+    });
+  }
+
+  async #handleDefinitiveExit(record, exit) {
     if (this.#active !== record) {
       return;
     }
 
     const priorState = this.#states.get(record.gameId);
+    await this.#waitForProxyReferences(record);
     this.#releaseRecord(record);
     if (priorState?.status === GAME_LIFECYCLE_STATUS.FAILED) {
       this.#setState(record.gameId, GAME_LIFECYCLE_STATUS.FAILED, {

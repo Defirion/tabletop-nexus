@@ -90,15 +90,17 @@ export function parsePublicGameRoute(requestTarget) {
   if (trailingSlash) {
     gameSegments.pop();
   }
-  if (gameSegments.some((segment) => segment === "" || segment === "." || segment === "..")) {
+  // A backend may discard matrix parameters before doing normal path
+  // canonicalization.  Reject them on every post-prefix segment: otherwise a
+  // matrix-qualified dot or empty segment could normalize into __nexus.
+  if (gameSegments.some((segment) => (
+    segment === "" || segment === "." || segment === ".." || segment.includes(";")
+  ))) {
     return { kind: "invalid" };
   }
-  // Some routers normalize semicolon matrix parameters before matching. Treat
-  // the protected first segment conservatively so that normalization cannot
-  // make a player route become a private management route.
   if (
     gameSegments[0] !== undefined
-    && asciiEqualsIgnoreCase(gameSegments[0].split(";", 1)[0], "__nexus")
+    && asciiEqualsIgnoreCase(gameSegments[0], "__nexus")
   ) {
     return { kind: "reserved" };
   }
@@ -209,21 +211,18 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
   if (typeof loadLibrary !== "function") {
     throw new TypeError("loadLibrary must be a function");
   }
-  if (!supervisor || typeof supervisor.getActiveRuntime !== "function") {
-    throw new TypeError("supervisor.getActiveRuntime must be a function");
+  if (!supervisor || typeof supervisor.acquireActiveRuntime !== "function") {
+    throw new TypeError("supervisor.acquireActiveRuntime must be a function");
   }
 
   async function resolveTarget(route) {
     const library = await loadLibrary(configPath);
-    if (!library.some((game) => game.manifest.id === route.gameId)) {
+    const game = library.find((candidate) => candidate.manifest.id === route.gameId);
+    if (game === undefined) {
       return { kind: "not-found" };
     }
-    const runtime = supervisor.getActiveRuntime();
-    if (
-      runtime === null
-      || runtime.gameId !== route.gameId
-      || runtime.status !== "running"
-    ) {
+    const runtime = supervisor.acquireActiveRuntime(game);
+    if (runtime === null) {
       return { kind: "unavailable" };
     }
     return { kind: "target", runtime };
@@ -245,9 +244,11 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
     let backendRequest;
     let backendResponse;
     let downstreamClosed = false;
+    let releaseTarget = () => undefined;
     const cancelUpstream = () => {
       backendResponse?.destroy();
       backendRequest?.destroy();
+      releaseTarget();
     };
     // A complete incoming request can still have a disconnected response. This
     // listener must exist before asynchronous target resolution begins.
@@ -262,6 +263,9 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
 
     const target = await resolveTarget(route);
     if (downstreamClosed || response.destroyed) {
+      if (target.kind === "target") {
+        target.runtime.release();
+      }
       return;
     }
     if (target.kind === "not-found") {
@@ -272,6 +276,7 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
       sendJson(response, 503, { error: "GAME_UNAVAILABLE" }, request.method);
       return;
     }
+    releaseTarget = target.runtime.release;
 
     try {
       backendRequest = httpRequest({
@@ -282,9 +287,19 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
         headers: proxyRequestHeaders(request.headers, false),
       });
     } catch {
+      releaseTarget();
       sendJson(response, 400, { error: "INVALID_GAME_ROUTE" }, request.method);
       return;
     }
+
+    backendRequest.once("socket", (backendSocket) => {
+      if (backendSocket.connecting) {
+        backendSocket.once("connect", releaseTarget);
+      } else {
+        queueMicrotask(releaseTarget);
+      }
+      backendSocket.once("error", releaseTarget);
+    });
 
     backendRequest.once("response", (incomingResponse) => {
       backendResponse = incomingResponse;
@@ -311,6 +326,7 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
       });
     });
     backendRequest.once("error", () => {
+      releaseTarget();
       if (downstreamClosed || response.destroyed) {
         return;
       }
@@ -321,6 +337,7 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
       }
     });
     if (downstreamClosed || response.destroyed) {
+      releaseTarget();
       backendRequest.destroy();
       return;
     }
@@ -332,10 +349,12 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
     let backendRequest;
     let backendResponse;
     let backendSocket;
+    let releaseTarget = () => undefined;
     const cancelUpstream = () => {
       backendResponse?.destroy();
       backendSocket?.destroy();
       backendRequest?.destroy();
+      releaseTarget();
     };
     socket.once("close", cancelUpstream);
     if (route.kind !== "game") {
@@ -364,8 +383,10 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
       return;
     }
     if (socket.destroyed) {
+      target.runtime.release();
       return;
     }
+    releaseTarget = target.runtime.release;
 
     try {
       backendRequest = httpRequest({
@@ -376,9 +397,19 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
         headers: proxyRequestHeaders(request.headers, true),
       });
     } catch {
+      releaseTarget();
       sendSocketResponse(socket, 400, "Bad Request", JSON.stringify({ error: "INVALID_GAME_ROUTE" }));
       return;
     }
+
+    backendRequest.once("socket", (backendConnection) => {
+      if (backendConnection.connecting) {
+        backendConnection.once("connect", releaseTarget);
+      } else {
+        queueMicrotask(releaseTarget);
+      }
+      backendConnection.once("error", releaseTarget);
+    });
 
     backendRequest.once("upgrade", (upgradeResponse, upgradeSocket, backendHead) => {
       backendResponse = upgradeResponse;
@@ -434,11 +465,13 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
       socket.resume();
     });
     backendRequest.once("error", () => {
+      releaseTarget();
       if (!socket.destroyed) {
         sendSocketResponse(socket, 502, "Bad Gateway", JSON.stringify({ error: "GAME_UNAVAILABLE" }));
       }
     });
     if (socket.destroyed) {
+      releaseTarget();
       backendRequest.destroy();
       return;
     }

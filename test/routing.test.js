@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
@@ -107,7 +107,7 @@ async function waitForDelayedHeaders(origin, expected) {
   assert.fail(`delayed-header count did not become ${expected}`);
 }
 
-function requestThatMustClose(origin, path, headers = {}) {
+function requestThatMustClose(origin, path, expectedBody, headers = {}) {
   const url = new URL(origin);
   return new Promise((resolve, reject) => {
     const request = httpRequest({
@@ -121,26 +121,28 @@ function requestThatMustClose(origin, path, headers = {}) {
       reject(new Error(`timed out waiting for ${path} to close`));
     }, 1_000);
     request.once("response", (response) => {
-      response.resume();
+      let body = "";
+      response.on("data", (chunk) => { body += chunk.toString("utf8"); });
+      const assertPartialResponse = () => {
+        assert.equal(response.statusCode, 200);
+        assert.match(body, expectedBody);
+      };
       response.once("end", () => {
         clearTimeout(timeout);
         reject(new Error(`${path} unexpectedly completed`));
       });
       response.once("aborted", () => {
         clearTimeout(timeout);
+        assertPartialResponse();
         resolve();
       });
       response.once("error", () => {
         clearTimeout(timeout);
+        assertPartialResponse();
         resolve();
       });
     });
     request.once("error", (error) => {
-      if (error.code === "ECONNRESET") {
-        clearTimeout(timeout);
-        resolve();
-        return;
-      }
       clearTimeout(timeout);
       reject(error);
     });
@@ -211,7 +213,11 @@ test("reserved management namespace and ambiguous canonicalization variants neve
     ["/games/runtime-fixture/safe/%2e%2e/__nexus/status", 400],
     ["/games/runtime-fixture//__nexus/status", 400],
     ["/games/runtime-fixture/%2f__nexus/status", 400],
-    ["/games/runtime-fixture/__nexus%3Bv/status", 404],
+    ["/games/runtime-fixture/__nexus%3Bv/status", 400],
+    ["/games/runtime-fixture/.;v/__nexus/status", 400],
+    ["/games/runtime-fixture/%2e%3bv/__nexus/status", 400],
+    ["/games/runtime-fixture/..;v/__nexus/status", 400],
+    ["/games/runtime-fixture/;v/__nexus/status", 400],
   ];
 
   for (const [path, expectedStatus] of routes) {
@@ -228,6 +234,45 @@ test("reserved management namespace and ambiguous canonicalization variants neve
   assert.equal(privateStatus.ready, true);
   assert.equal(typeof privateStatus.launchToken, "string");
   assert.ok(privateStatus.launchToken.length > 0);
+});
+
+test("a reloaded game ID with a different installed identity is unavailable to the active runtime", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "nexus-routing-reload-"));
+  const configPath = join(root, "nexus.config.json");
+  const replacementRoot = join(root, "replacement-game");
+  await mkdir(replacementRoot);
+  await writeFile(configPath, JSON.stringify({ games: [{ path: fixtureRoot }] }));
+  const [runningGame] = await loadLibrary(configPath);
+  const supervisor = new RuntimeSupervisor({
+    startupTimeoutMs: 3_000,
+    pollIntervalMs: 20,
+    requestTimeoutMs: 200,
+    stopGracePeriodMs: 500,
+  });
+  await supervisor.start(runningGame);
+  const server = createNexusServer(configPath, { supervisor });
+  const origin = await listen(server);
+
+  t.after(async () => {
+    await close(server);
+    await supervisor.stop().catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  });
+
+  await writeFile(join(replacementRoot, "boardgame.json"), JSON.stringify({
+    schema: 2,
+    id: "runtime-fixture",
+    name: "Replacement Fixture",
+    players: { min: 1, max: 4 },
+    capabilities: { tvLess: true },
+    runtime: { command: process.execPath, args: [join(fixtureRoot, "server.mjs")] },
+  }));
+  await writeFile(configPath, JSON.stringify({ games: [{ path: replacementRoot }] }));
+
+  const library = await fetch(`${origin}/api/games`);
+  assert.equal(library.status, 200);
+  assert.equal((await library.json()).games[0].name, "Replacement Fixture");
+  assert.equal((await rawGet(origin, "/games/runtime-fixture/")).status, 503);
 });
 
 test("game mount root redirects to its trailing-slash canonical URL", async (t) => {
@@ -288,32 +333,39 @@ test("disconnect before backend headers cancels the backend request", async (t) 
 
 test("incomplete backend HTTP and SSE responses close the public response", async (t) => {
   const { origin } = await startRoutingFixture(t);
-  await requestThatMustClose(origin, "/games/runtime-fixture/partial-response");
-  await requestThatMustClose(origin, "/games/runtime-fixture/partial-events");
+  await requestThatMustClose(origin, "/games/runtime-fixture/partial-response", /short/);
+  await requestThatMustClose(origin, "/games/runtime-fixture/partial-events", /data: connected/);
 });
 
-test("WebSocket upgrades share the Nexus game route and strip BASE_PATH", async (t) => {
+test("WebSocket upgrades proxy browser and runtime frames through the game route", async (t) => {
   const { origin } = await startRoutingFixture(t);
   const socketUrl = `${origin.replace(/^http/u, "ws")}/games/runtime-fixture/socket?room=green`;
 
-  const message = await new Promise((resolve, reject) => {
+  const messages = await new Promise((resolve, reject) => {
     const socket = new WebSocket(socketUrl);
     const timeout = setTimeout(() => {
       socket.close();
       reject(new Error("timed out waiting for fixture WebSocket message"));
     }, 2_000);
+    let initialMessage;
     socket.addEventListener("message", (event) => {
+      if (initialMessage === undefined) {
+        initialMessage = event.data;
+        socket.send("browser-to-runtime");
+        return;
+      }
       clearTimeout(timeout);
       socket.close();
-      resolve(event.data);
-    }, { once: true });
+      resolve([initialMessage, event.data]);
+    });
     socket.addEventListener("error", () => {
       clearTimeout(timeout);
       reject(new Error("fixture WebSocket failed"));
     }, { once: true });
   });
 
-  assert.deepEqual(JSON.parse(message), { url: "/socket?room=green" });
+  assert.deepEqual(JSON.parse(messages[0]), { url: "/socket?room=green" });
+  assert.deepEqual(JSON.parse(messages[1]), { received: "browser-to-runtime" });
 
   for (const path of [
     "/games/not-registered/socket",

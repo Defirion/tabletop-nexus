@@ -214,6 +214,26 @@ function websocketFrame(payload) {
   return Buffer.concat([Buffer.from([0x81, content.length]), content]);
 }
 
+function websocketText(frame) {
+  if (frame.length < 2 || (frame[0] & 0x0f) !== 0x01) {
+    return null;
+  }
+  const length = frame[1] & 0x7f;
+  const masked = (frame[1] & 0x80) !== 0;
+  const payloadOffset = 2 + (masked ? 4 : 0);
+  if (length >= 126 || frame.length < payloadOffset + length) {
+    return null;
+  }
+  const payload = Buffer.from(frame.subarray(payloadOffset, payloadOffset + length));
+  if (masked) {
+    const mask = frame.subarray(2, 6);
+    for (let index = 0; index < payload.length; index += 1) {
+      payload[index] ^= mask[index % mask.length];
+    }
+  }
+  return payload.toString("utf8");
+}
+
 server.on("upgrade", (request, socket) => {
   const requestUrl = new URL(request.url ?? "/", "http://runtime.invalid");
   if (requestUrl.pathname === "/upgrade-partial-response") {
@@ -248,6 +268,11 @@ server.on("upgrade", (request, socket) => {
     const opcode = frame[0] & 0x0f;
     if (opcode === 0x08) {
       socket.end(Buffer.from([0x88, 0x00]));
+      return;
+    }
+    const text = websocketText(frame);
+    if (text !== null) {
+      socket.write(websocketFrame(JSON.stringify({ received: text })));
     }
   });
 });
