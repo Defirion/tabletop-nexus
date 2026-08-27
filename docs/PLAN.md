@@ -25,11 +25,11 @@ Checkboxes describe implementation present on the branch containing this documen
 
 ## R2 — Single-port routing
 
-- [ ] Reverse-proxy HTTP under `/games/<id>/`, stripping the game `BASE_PATH` before forwarding to the private runtime except that any canonical post-prefix first path segment equal to ASCII `__nexus` case-insensitively is reserved and never player-proxyable.
-- [ ] Support WebSocket upgrades on the same game runtime/port.
-- [ ] Verify SSE/streaming behavior.
-- [ ] Reject invalid/unregistered game routes and any public path whose canonical post-prefix first segment is an ASCII case-insensitive match for `__nexus`, including encoded forms that canonicalize to such a case alias.
-- [ ] Add end-to-end routing tests against the fixture game, including lowercase `/games/<id>/__nexus/status`, direct mixed-case aliases such as `/games/<id>/__NEXUS/status` and `/games/<id>/__Nexus/status`, encoded mixed-case/canonicalization variants, unchanged ordinary game routes, near-name controls such as `/games/<id>/__nexusx/status` and `/games/<id>/__nexus-status`, and direct private Nexus readiness polling as a positive control.
+- [x] Reverse-proxy HTTP under `/games/<id>/`, stripping the game `BASE_PATH` before forwarding to the private runtime except that any canonical post-prefix first path segment equal to ASCII `__nexus` case-insensitively is reserved and never player-proxyable.
+- [x] Support WebSocket upgrades on the same game runtime/port.
+- [x] Verify SSE/streaming behavior.
+- [x] Reject invalid/unregistered game routes and any public path whose canonical post-prefix first segment is an ASCII case-insensitive match for `__nexus`, including encoded forms that canonicalize to such a case alias.
+- [x] Add end-to-end routing tests against the fixture game, including lowercase `/games/<id>/__nexus/status`, direct mixed-case aliases such as `/games/<id>/__NEXUS/status` and `/games/<id>/__Nexus/status`, encoded mixed-case/canonicalization variants, unchanged ordinary game routes, near-name controls such as `/games/<id>/__nexusx/status` and `/games/<id>/__nexus-status`, and direct private Nexus readiness polling as a positive control.
 
 ## Contract revision gate before R3
 

@@ -6,7 +6,7 @@ The project has one deliberately narrow responsibility:
 
 > **Nexus knows how to run games; Nexus does not know how games work.**
 
-Games remain independent applications and repositories. Tabletop Nexus discovers compatible games through a small manifest contract and now includes the R1 runtime supervisor for launching, readiness-checking, stopping, and switching one active private game runtime. R2 will proxy those runtimes behind the single browser-facing Nexus port.
+Games remain independent applications and repositories. Tabletop Nexus discovers compatible games through a small manifest contract, supervises one active private game runtime, and securely proxies that runtime's HTTP, WebSocket, and SSE traffic behind the single browser-facing Nexus port.
 
 ## Goals
 
@@ -19,7 +19,7 @@ Games remain independent applications and repositories. Tabletop Nexus discovers
 
 ## Status
 
-**R1 runtime supervisor implemented.** The current schema-2 game contract, local library discovery/validation, browser-safe `/api/games` output, minimal portal, private-port allocation, shell-free launch boundary, fixed readiness polling, lifecycle state, graceful/forced stop, and one-active-game sequencing are implemented. Single-port HTTP/WebSocket/SSE routing remains R2.
+**R2 single-port routing implemented.** The current schema-2 game contract, local library discovery/validation, browser-safe `/api/games` output, minimal portal, private-port allocation, shell-free launch boundary, fixed readiness polling, lifecycle state, graceful/forced stop, one-active-game sequencing, and registered-game HTTP/WebSocket/SSE proxying are implemented. Public game routing strips `BASE_PATH` while reserving every canonical ASCII case form of the private `__nexus` first path segment.
 
 See [`docs/PLAN.md`](docs/PLAN.md) for roadmap status and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for current component boundaries.
 
@@ -40,7 +40,7 @@ LAN clients
 Tabletop Nexus :3000
     |-- /                     portal
     |-- /api/games            configured game metadata
-    |-- /games/<game-id>/...  reverse proxy (planned R2)
+    |-- /games/<game-id>/...  HTTP/WebSocket/SSE reverse proxy
     |
     +-- R1 supervisor -> one selected private game runtime
 ```

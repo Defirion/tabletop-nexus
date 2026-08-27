@@ -2,7 +2,9 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createGameProxy, parsePublicGameRoute } from "./game-proxy.js";
 import { loadLibrary, toPublicGame } from "./registry.js";
+import { RuntimeSupervisor } from "./runtime/supervisor.js";
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 const publicRoot = resolve(moduleDir, "../public");
@@ -23,10 +25,18 @@ function sendJson(response, status, body, method = "GET") {
   response.end(method === "HEAD" ? undefined : content);
 }
 
-export function createNexusServer(configPath) {
-  return createServer(async (request, response) => {
+export function createNexusServer(configPath, {
+  supervisor = new RuntimeSupervisor(),
+} = {}) {
+  const proxy = createGameProxy({ configPath, loadLibrary, supervisor });
+  const server = createServer(async (request, response) => {
     try {
       const method = request.method ?? "GET";
+      const gameRoute = parsePublicGameRoute(request.url);
+      if (gameRoute.kind !== "not-game") {
+        await proxy.handleHttp(request, response, gameRoute);
+        return;
+      }
       const url = new URL(request.url ?? "/", "http://localhost");
 
       if ((method === "GET" || method === "HEAD") && url.pathname === "/healthz") {
@@ -60,18 +70,33 @@ export function createNexusServer(configPath) {
       sendJson(response, 500, { error: "INTERNAL_ERROR" }, request.method);
     }
   });
+  server.on("upgrade", (request, socket, head) => {
+    const route = parsePublicGameRoute(request.url);
+    proxy.handleUpgrade(request, socket, head, route).catch((error) => {
+      console.error(error);
+      if (!socket.destroyed) {
+        socket.end(
+          "HTTP/1.1 500 Internal Server Error\r\n"
+          + "Connection: close\r\n"
+          + "Content-Length: 0\r\n\r\n",
+        );
+      }
+    });
+  });
+  return server;
 }
 
 export async function startNexusServer({
   host = process.env.HOST ?? "0.0.0.0",
   port = Number(process.env.PORT ?? "3000"),
   configPath = resolve(process.env.NEXUS_CONFIG ?? "nexus.config.json"),
+  supervisor = new RuntimeSupervisor(),
 } = {}) {
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error(`Invalid PORT: ${port}`);
   }
 
-  const server = createNexusServer(resolve(configPath));
+  const server = createNexusServer(resolve(configPath), { supervisor });
   await new Promise((resolveListen, reject) => {
     server.once("error", reject);
     server.listen(port, host, resolveListen);

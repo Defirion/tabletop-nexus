@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { appendFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -36,6 +37,8 @@ const exitAfterReadyMs = options.has("--exit-after-ready-ms")
   ? Number(options.get("--exit-after-ready-ms"))
   : null;
 const readyAt = Date.now() + readyDelayMs;
+let activeStreams = 0;
+let streamSequence = 0;
 
 async function noteSignal(signal) {
   if (typeof signalFile === "string") {
@@ -71,8 +74,9 @@ if (helperListenerRoot && !helperListenerChild) {
   await new Promise(() => {});
 }
 
-const server = createServer((request, response) => {
-  if (request.url === "/__nexus/status") {
+const server = createServer(async (request, response) => {
+  const requestUrl = new URL(request.url ?? "/", "http://runtime.invalid");
+  if (requestUrl.pathname === "/__nexus/status") {
     if (statusMode === "malformed") {
       response.writeHead(200, { "content-type": "application/json" });
       response.end("{");
@@ -108,14 +112,97 @@ const server = createServer((request, response) => {
     return;
   }
 
-  if (request.url === "/fixture") {
+  if (requestUrl.pathname === "/events") {
+    activeStreams += 1;
+    streamSequence += 1;
+    response.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+    });
+    response.write(`id: ${streamSequence}\ndata: connected\n\n`);
+    const interval = setInterval(() => response.write(": heartbeat\n\n"), 50);
+    response.once("close", () => {
+      clearInterval(interval);
+      activeStreams -= 1;
+    });
+    return;
+  }
+
+  if (requestUrl.pathname === "/stream-state") {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ activeStreams }));
+    return;
+  }
+
+  if (requestUrl.pathname === "/fixture") {
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({ host, port, basePath }));
     return;
   }
 
+  const ordinaryRoute = requestUrl.pathname === "/"
+    || requestUrl.pathname === "/api/echo"
+    || requestUrl.pathname === "/__nexusx/status"
+    || requestUrl.pathname === "/__nexus-status";
+  if (ordinaryRoute) {
+    const chunks = [];
+    for await (const chunk of request) {
+      chunks.push(chunk);
+    }
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({
+      host,
+      port,
+      basePath,
+      method: request.method,
+      url: request.url,
+      forwarded: request.headers.forwarded ?? null,
+      xForwardedFor: request.headers["x-forwarded-for"] ?? null,
+      body: Buffer.concat(chunks).toString("utf8"),
+    }));
+    return;
+  }
+
   response.writeHead(404);
   response.end();
+});
+
+function websocketFrame(payload) {
+  const content = Buffer.from(payload, "utf8");
+  if (content.length >= 126) {
+    throw new Error("fixture WebSocket payload is too large");
+  }
+  return Buffer.concat([Buffer.from([0x81, content.length]), content]);
+}
+
+server.on("upgrade", (request, socket) => {
+  const requestUrl = new URL(request.url ?? "/", "http://runtime.invalid");
+  const key = request.headers["sec-websocket-key"];
+  if (requestUrl.pathname !== "/socket" || typeof key !== "string") {
+    socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+    return;
+  }
+
+  const accept = createHash("sha1")
+    .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+    .digest("base64");
+  socket.write(
+    "HTTP/1.1 101 Switching Protocols\r\n"
+    + "Upgrade: websocket\r\n"
+    + "Connection: Upgrade\r\n"
+    + `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+  );
+  socket.write(websocketFrame(JSON.stringify({ url: request.url })));
+  socket.on("data", (frame) => {
+    if (frame.length < 2) {
+      return;
+    }
+    const opcode = frame[0] & 0x0f;
+    if (opcode === 0x08) {
+      socket.end(Buffer.from([0x88, 0x00]));
+    }
+  });
 });
 
 process.on("SIGTERM", async () => {
