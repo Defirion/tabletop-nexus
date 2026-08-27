@@ -64,7 +64,16 @@ function installedGameIdentity(game) {
   if (typeof game.root !== "string" || game.root.length === 0) {
     throw new TypeError("game.root must be a non-empty string");
   }
-  return `${game.root}\u0000${stableManifestSignature(game.manifest)}`;
+  // Only fields which determine the running process and its public base path
+  // identify an installed runtime. Schema-2 descriptive and extension fields
+  // must remain operationally ignored while that runtime is active.
+  return `${game.root}\u0000${stableManifestSignature({
+    id: game.manifest.id,
+    runtime: {
+      command: game.manifest.runtime?.command,
+      args: game.manifest.runtime?.args,
+    },
+  })}`;
 }
 
 export class RuntimeSupervisor {

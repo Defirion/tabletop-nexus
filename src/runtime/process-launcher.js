@@ -322,7 +322,10 @@ function createHostedRuntime(
   let controllerExitExpected = false;
   let requestId = 0;
   let operation = Promise.resolve();
-  const control = { stopRequested: false };
+  // This protects the interval in which an intentional stop owns cleanup. It
+  // is deliberately not a permanent latch: a failed signal request must let a
+  // later root exit resume the controller's residual-cleanup path.
+  const control = { stopInProgress: false };
 
   const exit = new Promise((resolve) => {
     resolveExit = resolve;
@@ -450,7 +453,7 @@ function createHostedRuntime(
 
   async function cleanUnexpectedRuntime() {
     await queueOperation(async () => {
-      while (!control.stopRequested && !controllerClosed) {
+      while (!control.stopInProgress && !controllerClosed) {
         let live;
         try {
           live = defaultProcessGroupExists(processGroup, dependencies, { excludeController: true });
@@ -489,7 +492,7 @@ function createHostedRuntime(
       signal: message.signal ?? null,
       error: deserializeError(message.error),
     };
-    if (!control.stopRequested) {
+    if (!control.stopInProgress) {
       void cleanUnexpectedRuntime();
     }
   });
@@ -507,6 +510,12 @@ function createHostedRuntime(
     queueOperation,
     requestGroupSignal,
     releaseController,
+    recoverUnexpectedRuntime() {
+      control.stopInProgress = false;
+      if (rootExit !== null && !controllerClosed) {
+        void cleanUnexpectedRuntime();
+      }
+    },
     waitForMembersExit: () => waitForHostedRuntimeMembersExit(processGroup, dependencies),
   };
 }
@@ -586,7 +595,7 @@ function createLocalProcessLauncher({
           : null;
         if (processGroup === null) {
           const exit = trackDirectRuntimeExit(child);
-          runtimes.set(child, { exit, processGroup: null, control: { stopRequested: false } });
+          runtimes.set(child, { exit, processGroup: null, control: { stopInProgress: false } });
         } else {
           runtimes.set(
             child,
@@ -611,7 +620,7 @@ function createLocalProcessLauncher({
           : ["ignore", "ignore", "ignore"],
       });
       const exit = trackDirectRuntimeExit(child);
-      runtimes.set(child, { exit, processGroup: null, control: { stopRequested: false } });
+      runtimes.set(child, { exit, processGroup: null, control: { stopInProgress: false } });
       return child;
     },
     waitForExit(child) {
@@ -628,8 +637,8 @@ function createLocalProcessLauncher({
         throw new TypeError("unknown local game process handle");
       }
 
-      runtime.control.stopRequested = true;
       if (runtime.processGroup === null) {
+        runtime.control.stopInProgress = true;
         if (childHasExited(child)) {
           return Object.freeze({ ...(await runtime.exit), forced: false });
         }
@@ -656,40 +665,46 @@ function createLocalProcessLauncher({
         return Object.freeze({ ...(await runtime.exit), forced: true });
       }
 
-      return runtime.queueOperation(async () => {
-        if (childHasExited(child)) {
-          return Object.freeze({ ...(await runtime.exit), forced: false });
-        }
+      runtime.control.stopInProgress = true;
+      try {
+        return await runtime.queueOperation(async () => {
+          if (childHasExited(child)) {
+            return Object.freeze({ ...(await runtime.exit), forced: false });
+          }
 
-        const live = defaultProcessGroupExists(runtime.processGroup, dependencies, {
-          excludeController: true,
-        });
-        if (!live) {
-          await runtime.releaseController();
-          return Object.freeze({ ...(await runtime.exit), forced: false });
-        }
+          const live = defaultProcessGroupExists(runtime.processGroup, dependencies, {
+            excludeController: true,
+          });
+          if (!live) {
+            await runtime.releaseController();
+            return Object.freeze({ ...(await runtime.exit), forced: false });
+          }
 
-        if (runtime.rootExit !== null) {
+          if (runtime.rootExit !== null) {
+            await runtime.requestGroupSignal("SIGKILL");
+            return Object.freeze({ ...(await runtime.exit), forced: true });
+          }
+
+          await runtime.requestGroupSignal("SIGTERM");
+          let timeoutId;
+          const gracefulTimeout = new Promise((resolve) => {
+            timeoutId = setTimeoutFn(() => resolve(false), gracePeriodMs);
+          });
+          const gracefulExit = runtime.waitForMembersExit().then(() => true);
+          const graceful = await Promise.race([gracefulExit, gracefulTimeout]);
+          if (graceful) {
+            clearTimeoutFn(timeoutId);
+            await runtime.releaseController();
+            return Object.freeze({ ...(await runtime.exit), forced: false });
+          }
+
           await runtime.requestGroupSignal("SIGKILL");
           return Object.freeze({ ...(await runtime.exit), forced: true });
-        }
-
-        await runtime.requestGroupSignal("SIGTERM");
-        let timeoutId;
-        const gracefulTimeout = new Promise((resolve) => {
-          timeoutId = setTimeoutFn(() => resolve(false), gracePeriodMs);
         });
-        const gracefulExit = runtime.waitForMembersExit().then(() => true);
-        const graceful = await Promise.race([gracefulExit, gracefulTimeout]);
-        if (graceful) {
-          clearTimeoutFn(timeoutId);
-          await runtime.releaseController();
-          return Object.freeze({ ...(await runtime.exit), forced: false });
-        }
-
-        await runtime.requestGroupSignal("SIGKILL");
-        return Object.freeze({ ...(await runtime.exit), forced: true });
-      });
+      } catch (error) {
+        runtime.recoverUnexpectedRuntime();
+        throw error;
+      }
     },
   });
 }

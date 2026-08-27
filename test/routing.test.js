@@ -275,6 +275,47 @@ test("a reloaded game ID with a different installed identity is unavailable to t
   assert.equal((await rawGet(origin, "/games/runtime-fixture/")).status, 503);
 });
 
+test("unknown manifest fields do not change an active runtime identity", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "nexus-routing-unknown-manifest-"));
+  const configPath = join(root, "nexus.config.json");
+  const gameRoot = join(root, "game");
+  const manifestPath = join(gameRoot, "boardgame.json");
+  const manifest = {
+    schema: 2,
+    id: "runtime-fixture",
+    name: "Runtime Fixture",
+    players: { min: 1, max: 4 },
+    capabilities: { tvLess: true },
+    runtime: { command: process.execPath, args: [join(fixtureRoot, "server.mjs")] },
+    gameOwnedMetadata: { revision: 1 },
+  };
+  await mkdir(gameRoot);
+  await writeFile(manifestPath, JSON.stringify(manifest));
+  await writeFile(configPath, JSON.stringify({ games: [{ path: gameRoot }] }));
+  const [runningGame] = await loadLibrary(configPath);
+  const supervisor = new RuntimeSupervisor({
+    startupTimeoutMs: 3_000,
+    pollIntervalMs: 20,
+    requestTimeoutMs: 200,
+    stopGracePeriodMs: 500,
+  });
+  await supervisor.start(runningGame);
+  const server = createNexusServer(configPath, { supervisor });
+  const origin = await listen(server);
+
+  t.after(async () => {
+    await close(server);
+    await supervisor.stop().catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  });
+
+  manifest.gameOwnedMetadata = { revision: 2, arbitrary: ["extension", "data"] };
+  await writeFile(manifestPath, JSON.stringify(manifest));
+
+  assert.equal((await rawGet(origin, "/games/runtime-fixture/")).status, 200);
+  assert.equal(supervisor.getActiveRuntime().gameId, "runtime-fixture");
+});
+
 test("game mount root redirects to its trailing-slash canonical URL", async (t) => {
   const { origin } = await startRoutingFixture(t);
   const response = await fetch(`${origin}/games/runtime-fixture?room=blue`, { redirect: "manual" });

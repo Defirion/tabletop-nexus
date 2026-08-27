@@ -115,6 +115,22 @@ function createBlockedUnexpectedCleanupLauncher() {
   };
 }
 
+function createFirstGracefulSignalFailureLauncher() {
+  const realProcessKill = process.kill.bind(process);
+  let failFirstGracefulSignal = true;
+  return createLocalGameProcessLauncher({
+    processKill(pid, signal) {
+      if (pid < 0 && signal === "SIGTERM" && failFirstGracefulSignal) {
+        failFirstGracefulSignal = false;
+        const error = new Error("synthetic graceful group signal failure");
+        error.code = "EPERM";
+        throw error;
+      }
+      return realProcessKill(pid, signal);
+    },
+  });
+}
+
 async function readRuntimePids(path) {
   const [rootPid, helperPid] = (await readFile(path, "utf8")).trim().split(/\r?\n/).map(Number);
   return { rootPid, helperPid };
@@ -224,6 +240,38 @@ test("Linux unexpected root exit retains ownership while a descendant survives f
     blockedCleanup.allowCleanup();
     await supervisor.stop().catch(() => undefined);
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Linux failed graceful group signal re-enables cleanup when the root later exits", { skip: process.platform !== "linux" }, async () => {
+  const recording = createRecordingAllocator();
+  const supervisor = new RuntimeSupervisor({
+    allocator: recording.allocator,
+    launcher: createFirstGracefulSignalFailureLauncher(),
+    startupTimeoutMs: 2_000,
+    pollIntervalMs: 20,
+    requestTimeoutMs: 100,
+    stopGracePeriodMs: 50,
+  });
+
+  try {
+    await supervisor.start(fixtureGame("failed-stop-a", ["--exit-after-ready-ms=150"]));
+    await assert.rejects(
+      () => supervisor.start(fixtureGame("failed-stop-b")),
+      /failed to deliver SIGTERM to game process/,
+    );
+
+    assert.equal(recording.allocations[0].released, false);
+    await waitUntil(() => recording.allocations[0].released);
+    assert.equal(supervisor.getActiveRuntime(), null);
+
+    await supervisor.start(fixtureGame("failed-stop-b"));
+    assert.ok(
+      recording.events.indexOf("release:1:true") < recording.events.indexOf("allocate:2"),
+      `expected automatic cleanup/release before replacement allocation, got ${recording.events.join(", ")}`,
+    );
+  } finally {
+    await supervisor.stop().catch(() => undefined);
   }
 });
 
