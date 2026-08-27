@@ -78,8 +78,9 @@ export function queryNexusStatus({
         },
         (response) => {
           if (response.statusCode !== 200) {
-            response.resume();
-            settle(invalid(`status-${response.statusCode ?? "unknown"}`));
+            if (settle(invalid(`status-${response.statusCode ?? "unknown"}`))) {
+              response.destroy();
+            }
             return;
           }
 
@@ -88,8 +89,9 @@ export function queryNexusStatus({
             .trim()
             .toLowerCase();
           if (contentType !== "application/json") {
-            response.resume();
-            settle(invalid("content-type"));
+            if (settle(invalid("content-type"))) {
+              response.destroy();
+            }
             return;
           }
 

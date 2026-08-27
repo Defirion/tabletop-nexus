@@ -39,6 +39,7 @@ const exitAfterReadyMs = options.has("--exit-after-ready-ms")
 const readyAt = Date.now() + readyDelayMs;
 let activeStreams = 0;
 let streamSequence = 0;
+let delayedHeaders = 0;
 
 async function noteSignal(signal) {
   if (typeof signalFile === "string") {
@@ -129,9 +130,43 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (requestUrl.pathname === "/delayed-headers") {
+    delayedHeaders += 1;
+    let closed = false;
+    const finish = () => {
+      if (!closed) {
+        closed = true;
+        delayedHeaders -= 1;
+      }
+    };
+    const timer = setTimeout(() => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write("data: connected\n\n");
+    }, 500);
+    response.once("close", () => {
+      clearTimeout(timer);
+      finish();
+    });
+    return;
+  }
+
+  if (requestUrl.pathname === "/partial-response") {
+    response.writeHead(200, { "content-type": "text/plain", "content-length": "20" });
+    response.write("short");
+    setTimeout(() => request.socket.destroy(), 10);
+    return;
+  }
+
+  if (requestUrl.pathname === "/partial-events") {
+    response.writeHead(200, { "content-type": "text/event-stream", connection: "keep-alive" });
+    response.write("data: connected\n\n");
+    setTimeout(() => request.socket.destroy(), 10);
+    return;
+  }
+
   if (requestUrl.pathname === "/stream-state") {
     response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ activeStreams }));
+    response.end(JSON.stringify({ activeStreams, delayedHeaders }));
     return;
   }
 
@@ -143,6 +178,7 @@ const server = createServer(async (request, response) => {
 
   const ordinaryRoute = requestUrl.pathname === "/"
     || requestUrl.pathname === "/api/echo"
+    || requestUrl.pathname === "/api/100%25"
     || requestUrl.pathname === "/__nexusx/status"
     || requestUrl.pathname === "/__nexus-status";
   if (ordinaryRoute) {
@@ -159,6 +195,8 @@ const server = createServer(async (request, response) => {
       url: request.url,
       forwarded: request.headers.forwarded ?? null,
       xForwardedFor: request.headers["x-forwarded-for"] ?? null,
+      xForwardedPrefix: request.headers["x-forwarded-prefix"] ?? null,
+      xForwardedPort: request.headers["x-forwarded-port"] ?? null,
       body: Buffer.concat(chunks).toString("utf8"),
     }));
     return;
@@ -178,6 +216,15 @@ function websocketFrame(payload) {
 
 server.on("upgrade", (request, socket) => {
   const requestUrl = new URL(request.url ?? "/", "http://runtime.invalid");
+  if (requestUrl.pathname === "/upgrade-partial-response") {
+    socket.write(
+      "HTTP/1.1 503 Service Unavailable\r\n"
+      + "Content-Type: text/plain\r\n"
+      + "Content-Length: 20\r\n\r\nshort",
+    );
+    setTimeout(() => socket.destroy(), 10);
+    return;
+  }
   const key = request.headers["sec-websocket-key"];
   if (requestUrl.pathname !== "/socket" || typeof key !== "string") {
     socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");

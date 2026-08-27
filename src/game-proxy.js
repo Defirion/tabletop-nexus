@@ -14,9 +14,6 @@ const HOP_BY_HOP_HEADERS = new Set([
 ]);
 const UNTRUSTED_FORWARDING_HEADERS = new Set([
   "forwarded",
-  "x-forwarded-for",
-  "x-forwarded-host",
-  "x-forwarded-proto",
   "cf-connecting-ip",
   "cf-ray",
 ]);
@@ -55,31 +52,36 @@ export function parsePublicGameRoute(requestTarget) {
     return { kind: "invalid" };
   }
 
-  let decodedPath;
+  // Split before decoding. Decoding the entire path first would turn an encoded
+  // slash into a route separator and change the game-visible route boundary.
+  if (rawPath.includes("\\") || rawPath.includes("//")) {
+    return { kind: "invalid" };
+  }
+  const rawSegments = rawPath.split("/");
+  let segments;
   try {
-    decodedPath = decodeURIComponent(rawPath);
+    segments = rawSegments.map((segment) => decodeURIComponent(segment));
   } catch {
     return { kind: "invalid" };
   }
-
-  // A remaining percent sign represents nested encoding. Backslashes,
-  // controls, duplicate separators, and dot segments have differing path
-  // meanings across common backend routers, so none cross the proxy boundary.
-  if (
-    decodedPath.includes("%")
-    || decodedPath.includes("\\")
-    || decodedPath.includes("//")
-    || /[\u0000-\u001f\u007f]/u.test(decodedPath)
-  ) {
+  // An encoded separator, backslash, control, or a second encoded escape has
+  // different meanings in common backend routers, so fail closed. A lone
+  // decoded percent (for example, `100%25`) remains valid path data.
+  if (segments.some((segment) => (
+    segment.includes("/")
+    || segment.includes("\\")
+    || /[\u0000-\u001f\u007f]/u.test(segment)
+    || /%[0-9a-f]{2}/iu.test(segment)
+  ))) {
     return { kind: "invalid" };
   }
 
-  const trailingSlash = decodedPath.endsWith("/");
-  const segments = decodedPath.split("/");
+  const trailingSlash = rawPath.endsWith("/");
   if (
     segments[0] !== ""
     || segments[1] !== "games"
     || !GAME_ID_PATTERN.test(segments[2] ?? "")
+    || rawSegments[2] !== segments[2]
   ) {
     return { kind: "invalid" };
   }
@@ -91,7 +93,13 @@ export function parsePublicGameRoute(requestTarget) {
   if (gameSegments.some((segment) => segment === "" || segment === "." || segment === "..")) {
     return { kind: "invalid" };
   }
-  if (gameSegments[0] !== undefined && asciiEqualsIgnoreCase(gameSegments[0], "__nexus")) {
+  // Some routers normalize semicolon matrix parameters before matching. Treat
+  // the protected first segment conservatively so that normalization cannot
+  // make a player route become a private management route.
+  if (
+    gameSegments[0] !== undefined
+    && asciiEqualsIgnoreCase(gameSegments[0].split(";", 1)[0], "__nexus")
+  ) {
     return { kind: "reserved" };
   }
 
@@ -99,6 +107,9 @@ export function parsePublicGameRoute(requestTarget) {
     kind: "game",
     gameId: segments[2],
     backendPath: `${encodePath(gameSegments, trailingSlash)}${query}`,
+    canonicalRootLocation: gameSegments.length === 0 && !trailingSlash
+      ? `/games/${segments[2]}/${query}`
+      : undefined,
   };
 }
 
@@ -127,6 +138,7 @@ function proxyRequestHeaders(headers, upgrade) {
       || HOP_BY_HOP_HEADERS.has(lowerName)
       || connectionNames.has(lowerName)
       || UNTRUSTED_FORWARDING_HEADERS.has(lowerName)
+      || lowerName.startsWith("x-forwarded-")
       || lowerName === "sec-websocket-extensions"
     ) {
       continue;
@@ -224,8 +236,34 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
       }, request.method);
       return;
     }
+    if (route.canonicalRootLocation !== undefined) {
+      response.writeHead(308, { location: route.canonicalRootLocation });
+      response.end();
+      return;
+    }
+
+    let backendRequest;
+    let backendResponse;
+    let downstreamClosed = false;
+    const cancelUpstream = () => {
+      backendResponse?.destroy();
+      backendRequest?.destroy();
+    };
+    // A complete incoming request can still have a disconnected response. This
+    // listener must exist before asynchronous target resolution begins.
+    response.once("close", () => {
+      downstreamClosed = true;
+      cancelUpstream();
+    });
+    request.once("aborted", () => {
+      downstreamClosed = true;
+      cancelUpstream();
+    });
 
     const target = await resolveTarget(route);
+    if (downstreamClosed || response.destroyed) {
+      return;
+    }
     if (target.kind === "not-found") {
       sendJson(response, 404, { error: "NOT_FOUND" }, request.method);
       return;
@@ -235,7 +273,6 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
       return;
     }
 
-    let backendRequest;
     try {
       backendRequest = httpRequest({
         host: target.runtime.host,
@@ -249,27 +286,58 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
       return;
     }
 
-    backendRequest.once("response", (backendResponse) => {
+    backendRequest.once("response", (incomingResponse) => {
+      backendResponse = incomingResponse;
+      if (downstreamClosed || response.destroyed) {
+        backendResponse.destroy();
+        return;
+      }
       response.writeHead(
         backendResponse.statusCode ?? 502,
         proxyResponseHeaders(backendResponse.headers),
       );
       backendResponse.pipe(response);
-      response.once("close", () => backendResponse.destroy());
+      const destroyDownstream = () => {
+        if (!response.destroyed) {
+          response.destroy();
+        }
+      };
+      backendResponse.once("aborted", destroyDownstream);
+      backendResponse.once("error", destroyDownstream);
+      backendResponse.once("close", () => {
+        if (!backendResponse.complete) {
+          destroyDownstream();
+        }
+      });
     });
     backendRequest.once("error", () => {
+      if (downstreamClosed || response.destroyed) {
+        return;
+      }
       if (!response.headersSent) {
         sendJson(response, 502, { error: "GAME_UNAVAILABLE" }, request.method);
       } else {
         response.destroy();
       }
     });
-    request.once("aborted", () => backendRequest.destroy());
+    if (downstreamClosed || response.destroyed) {
+      backendRequest.destroy();
+      return;
+    }
     request.pipe(backendRequest);
   }
 
   async function handleUpgrade(request, socket, head, route) {
     socket.pause();
+    let backendRequest;
+    let backendResponse;
+    let backendSocket;
+    const cancelUpstream = () => {
+      backendResponse?.destroy();
+      backendSocket?.destroy();
+      backendRequest?.destroy();
+    };
+    socket.once("close", cancelUpstream);
     if (route.kind !== "game") {
       sendSocketResponse(
         socket,
@@ -299,7 +367,6 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
       return;
     }
 
-    let backendRequest;
     try {
       backendRequest = httpRequest({
         host: target.runtime.host,
@@ -313,7 +380,13 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
       return;
     }
 
-    backendRequest.once("upgrade", (backendResponse, backendSocket, backendHead) => {
+    backendRequest.once("upgrade", (upgradeResponse, upgradeSocket, backendHead) => {
+      backendResponse = upgradeResponse;
+      backendSocket = upgradeSocket;
+      if (socket.destroyed) {
+        cancelUpstream();
+        return;
+      }
       writeUpgradeHead(socket, backendResponse);
       if (head.length > 0) {
         backendSocket.write(head);
@@ -328,7 +401,12 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
       socket.resume();
       backendSocket.resume();
     });
-    backendRequest.once("response", (backendResponse) => {
+    backendRequest.once("response", (incomingResponse) => {
+      backendResponse = incomingResponse;
+      if (socket.destroyed) {
+        backendResponse.destroy();
+        return;
+      }
       const status = backendResponse.statusCode ?? 502;
       const reason = backendResponse.statusMessage ?? "Bad Gateway";
       const headers = proxyResponseHeaders(backendResponse.headers);
@@ -341,12 +419,29 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
       socket.write(`${lines.join("\r\n")}\r\n\r\n`);
       backendResponse.pipe(socket);
       backendResponse.once("end", () => socket.end());
+      const destroySocket = () => {
+        if (!socket.destroyed) {
+          socket.destroy();
+        }
+      };
+      backendResponse.once("aborted", destroySocket);
+      backendResponse.once("error", destroySocket);
+      backendResponse.once("close", () => {
+        if (!backendResponse.complete) {
+          destroySocket();
+        }
+      });
       socket.resume();
     });
     backendRequest.once("error", () => {
-      sendSocketResponse(socket, 502, "Bad Gateway", JSON.stringify({ error: "GAME_UNAVAILABLE" }));
+      if (!socket.destroyed) {
+        sendSocketResponse(socket, 502, "Bad Gateway", JSON.stringify({ error: "GAME_UNAVAILABLE" }));
+      }
     });
-    socket.once("close", () => backendRequest.destroy());
+    if (socket.destroyed) {
+      backendRequest.destroy();
+      return;
+    }
     backendRequest.end();
   }
 

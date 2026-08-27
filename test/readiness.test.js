@@ -142,3 +142,23 @@ test("queryNexusStatus enforces an absolute request deadline while response byte
     assert.ok(elapsedMs < 200, `absolute request deadline took ${elapsedMs}ms`);
   });
 });
+
+test("queryNexusStatus destroys an endless header-invalid response before the next probe", async () => {
+  let openResponses = 0;
+  await withStatusServer((_request, response) => {
+    openResponses += 1;
+    response.writeHead(503, { "content-type": "text/plain", "transfer-encoding": "chunked" });
+    const interval = setInterval(() => response.write("still unavailable\n"), 10);
+    response.once("close", () => {
+      clearInterval(interval);
+      openResponses -= 1;
+    });
+  }, async (port) => {
+    for (let index = 0; index < 5; index += 1) {
+      const result = await queryNexusStatus({ host: "127.0.0.1", port, launchToken });
+      assert.equal(result.reason, "status-503");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(openResponses, 0);
+  });
+});
