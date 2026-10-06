@@ -19,13 +19,15 @@ Games remain independent applications and repositories. Tabletop Nexus discovers
 
 ## Status
 
-**R2 single-port routing implemented.** The current schema-2 game contract, local library discovery/validation, browser-safe `/api/games` output, minimal portal, private-port allocation, shell-free launch boundary, fixed readiness polling, lifecycle state, graceful/forced stop, one-active-game sequencing, and registered-game HTTP/WebSocket/SSE proxying are implemented. Public game routing strips `BASE_PATH` while reserving every canonical ASCII case form of the private `__nexus` first path segment.
+**R2 single-port routing and the schema-3 adapter contract are implemented.** The current contract, local library discovery/validation, browser-safe `/api/games` output, minimal portal, private-port allocation, shell-free launch boundary, fixed readiness polling, lifecycle state, graceful/forced stop, one-active-game sequencing, and registered-game HTTP/WebSocket/SSE proxying are implemented. Public game routing strips `BASE_PATH` while reserving every canonical ASCII case form of the private `__nexus` first path segment.
+
+The N0 schema-3 baseline is finalized locally; [`docs/PLAN.md`](docs/PLAN.md) records its branch and verification status. Publication/integration into upstream `main` is separate. Real-game adapter acceptance and portal lifecycle controls remain N1/N2 work. The Windows verification gate skips six Linux-only lifecycle checks; Linux acceptance remains part of N1/N3.
 
 See [`docs/PLAN.md`](docs/PLAN.md) for roadmap status and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for current component boundaries.
 
 Planning documents for later architecture are also available:
 
-- [`docs/GAME-AUTHORING-GUIDE.md`](docs/GAME-AUTHORING-GUIDE.md) — selected stricter game-integration direction for later contract promotion;
+- [`docs/GAME-AUTHORING-GUIDE.md`](docs/GAME-AUTHORING-GUIDE.md) — rationale and guidance for the schema-3 game-integration contract;
 - [`docs/DEPLOYMENT-MODEL.md`](docs/DEPLOYMENT-MODEL.md) — ordinary-Linux-host and one-active-game deployment assumptions;
 - [`docs/REMOTE-PLAY.md`](docs/REMOTE-PLAY.md) — proposed friends-only internet exposure, security model, and support gate.
 
@@ -67,7 +69,7 @@ The default Nexus address is `http://localhost:3000`. `HOST`, `PORT`, and `NEXUS
 
 ## Adding a game locally
 
-A compatible schema-2 game keeps `boardgame.json` at its repository root. Add that repository path to local `nexus.config.json`:
+A compatible schema-3 game keeps `boardgame.json` at its repository root. Add that repository path to local `nexus.config.json`:
 
 ```json
 {
@@ -78,6 +80,8 @@ A compatible schema-2 game keeps `boardgame.json` at its repository root. Add th
 ```
 
 Relative game paths are resolved from the config file's directory. The local config is gitignored. Game repositories and their content are not vendored into Nexus.
+
+Only manifest schema 3 is accepted. Schema-2 games, including the existing Pirate Island adapter, need a behavior-and-manifest migration before registration here. Invalid configured manifests fail the library load; temporarily remove an older registration while migrating it. Nexus never upgrades a game's capability claims automatically. The private readiness payload remains schema 2. See [`GAME-CONTRACT.md`](GAME-CONTRACT.md) for the migration requirements.
 
 ## Verification
 

@@ -19,7 +19,7 @@ function fixtureGame(id, args = []) {
   return {
     root: fixtureRoot,
     manifest: {
-      schema: 2,
+      schema: 3,
       id,
       name: id,
       players: { min: 1, max: 4 },
@@ -137,7 +137,7 @@ async function createRacingReadinessAllocator(responderLaunchToken) {
     statusRequests += 1;
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({
-      schema: 2,
+      schema: 2, // Readiness stays schema 2; only the launch token is wrong.
       ready: true,
       launchToken: responderLaunchToken,
     }));

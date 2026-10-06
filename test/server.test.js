@@ -38,18 +38,19 @@ test("server health and empty-library API are runnable without local config", as
   assert.match(await portal.text(), /Tabletop Nexus/);
 });
 
-test("server API never exposes configured paths or runtime commands", async (t) => {
+test("server API never exposes configured paths, runtime commands, tokens, or unknown metadata", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "tabletop-nexus-server-"));
   const gameRoot = join(root, "secret-game-path");
   await mkdir(gameRoot);
   await writeFile(
     join(gameRoot, "boardgame.json"),
     JSON.stringify({
-      schema: 2,
+      schema: 3,
       id: "safe-game",
       name: "Safe Game",
-      players: { min: 1, max: 2 },
-      capabilities: { tvLess: true },
+      players: { min: 1, max: 2, private: "secret-player-data" },
+      capabilities: { tvLess: true, private: "secret-capability-data" },
+      launchToken: "secret-launch-token",
       runtime: { command: "secret-command", args: ["--secret"] },
     }),
   );
@@ -66,6 +67,9 @@ test("server API never exposes configured paths or runtime commands", async (t) 
   assert.equal(text.includes(gameRoot), false);
   assert.equal(text.includes("secret-command"), false);
   assert.equal(text.includes("--secret"), false);
+  assert.equal(text.includes("secret-launch-token"), false);
+  assert.equal(text.includes("secret-player-data"), false);
+  assert.equal(text.includes("secret-capability-data"), false);
   assert.deepEqual(JSON.parse(text), {
     games: [{
       id: "safe-game",

@@ -60,8 +60,8 @@ test("launchLocalGameProcess keeps executable, arguments, environment, shell bou
   );
 
   const result = launchLocalGameProcess(game, {
-    parentEnv: { KEEP: "yes", HOST: "wrong" },
-    environment: { HOST: "127.0.0.1", PORT: "43123", BASE_PATH: "/games/example" },
+    parentEnv: { KEEP: "yes", HOST: "wrong", PORT: "1", BASE_PATH: "/wrong", NEXUS_LAUNCH_TOKEN: "wrong" },
+    environment: { HOST: "127.0.0.1", PORT: "43123", BASE_PATH: "/games/example", NEXUS_LAUNCH_TOKEN: "current-launch" },
     spawn(command, args, options) {
       calls.push({ command, args, options });
       return child;
@@ -80,6 +80,7 @@ test("launchLocalGameProcess keeps executable, arguments, environment, shell bou
         HOST: "127.0.0.1",
         PORT: "43123",
         BASE_PATH: "/games/example",
+        NEXUS_LAUNCH_TOKEN: "current-launch",
       },
       stdio: ["ignore", "pipe", "pipe"],
     },

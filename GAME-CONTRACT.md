@@ -6,15 +6,19 @@ The boundary is runtime integration, not game design: **Nexus knows how to run g
 
 ## Contract version
 
-Current manifest schema: `2`.
+Current manifest schema: `3`.
 
-Schema 2 replaces schema 1's configurable `runtime.healthPath` with the fixed private Nexus readiness surface `GET /__nexus/status`. Schema 1 is no longer accepted by the current validator; this is an explicit contract migration rather than a silent redefinition of schema 1.
+Schema 3 promotes the browser/runtime compatibility requirements deliberately deferred after schema 2: same-origin and base-path-safe browser behavior, service-worker containment, clean shutdown, server-authoritative shared state, normal session recovery where applicable, and the canonical optional dedicated-display entrypoint. Schema 2 remains the status-payload schema for the private readiness surface; it is not a manifest schema.
+
+Manifest schemas 1 and 2 are no longer accepted by the current validator. This is an explicit contract migration rather than a silent redefinition of an already-supported contract.
+
+Existing schema-2 registrations fail validation until their game repository implements the schema-3 obligations and updates its manifest. Nexus does not upgrade manifests automatically. An invalid configured manifest currently fails the library load (including `/api/games`); remove that registration temporarily or migrate the game before using the revised library. This includes Pirate Island's existing schema-2 adapter. Readiness payloads remain schema 2 and must not be changed to 3 during this migration.
 
 Compatible games expose `boardgame.json` at the game repository root:
 
 ```json
 {
-  "schema": 2,
+  "schema": 3,
   "id": "example-game",
   "name": "Example Game",
   "description": "A short library-card description.",
@@ -33,7 +37,7 @@ Compatible games expose `boardgame.json` at the game repository root:
 
 ## Required manifest fields
 
-- `schema`: contract schema version. Currently `2`.
+- `schema`: contract schema version. Currently `3`.
 - `id`: stable lowercase identifier using letters, numbers, and single hyphens between segments.
 - `name`: non-empty human-readable title.
 - `players.min` / `players.max`: positive integers with `max >= min`.
@@ -43,7 +47,7 @@ Compatible games expose `boardgame.json` at the game repository root:
 
 `runtime.command` must identify a program the target operating system can execute directly. It is not a command line: shell built-ins, pipelines, redirects, or strings such as `npm run start:nexus` do not belong in this field. Keep every argument in `runtime.args`. Platform command shims that themselves require a shell are not portable Nexus launch targets; use the underlying executable entrypoint instead.
 
-`description`, `personalDevices`, and `dedicatedDisplay` are optional descriptive metadata. Unknown fields are ignored by schema 2 so games may carry their own metadata without widening Nexus's responsibility. A `runtime.healthPath` field has no Nexus meaning in schema 2; Nexus always polls the fixed readiness surface below.
+`description` is an optional string. `capabilities.personalDevices` and `capabilities.dedicatedDisplay` are optional booleans. When `dedicatedDisplay` is `true`, it is also a compatibility promise: the game must provide the canonical public `BASE_PATH/board/` entrypoint described below. Games that omit it or set it to `false` have no board-route requirement. Unknown fields are ignored by schema 3 so games may carry their own metadata without widening Nexus's responsibility. A `runtime.healthPath` field has no Nexus meaning in schema 3; Nexus always polls the fixed readiness surface below.
 
 ## Public versus private metadata
 
@@ -74,9 +78,11 @@ The runtime must bind its browser-facing listener to the exact supplied `HOST` a
 
 ### Base-path behavior
 
-A game must work when mounted below `BASE_PATH`, not only at `/`. Browser navigation, static assets, API calls, WebSockets/SSE, redirects, and cookie paths must remain within the assigned public base path.
+A game must work when mounted below `BASE_PATH`, not only at `/`. Browser navigation, static assets, API calls, WebSockets/SSE, redirects, generated links, and cookie paths must remain on the public Nexus origin within the assigned public base path. Browser code must not construct direct private-port, LAN-host, or development-server URLs in Nexus mode.
 
 Nexus may strip the public game prefix while proxying requests, but the browser-facing application must still generate URLs that remain under `BASE_PATH`.
+
+If a game uses a service worker, its registration scope must be contained within `BASE_PATH/`; it must not control the Nexus portal or a sibling game's paths. A runtime that serves files from disk must expose an explicit public build/static root, never the game repository root or arbitrary server files.
 
 ## One-process LAN runtime
 
@@ -86,7 +92,7 @@ The runtime is responsible for serving its frontend and browser-facing HTTP/WebS
 
 ## Nexus readiness surface
 
-Every schema-2 runtime must expose this private endpoint on the assigned `HOST` and `PORT`:
+Every schema-3 runtime must expose this private endpoint on the assigned `HOST` and `PORT`:
 
 ```http
 GET /__nexus/status
@@ -121,15 +127,39 @@ The `__nexus` first path segment is private runtime-management space. R2 reserve
 
 Games may keep independent diagnostics such as `/healthz` or metrics endpoints; Nexus does not interpret them.
 
-## TV-less requirement
+## Player experience, sessions, and authority
+
+Every compatible game has a server-authoritative shared-state model: browsers submit intent/input and render a game-provided projection, while the runtime remains the source of truth for the shared board. Nexus does not inspect the state, actions, or payloads.
+
+When a game has multiplayer sessions or rooms, its normal landing page must expose game-owned joinable sessions and a way to create a session. It must recover the current game experience after an ordinary browser refresh or transient network interruption without requiring the original HTTP, WebSocket, or SSE connection to survive. Exact room, seat, reconnect-token, and authorization mechanisms remain game-owned.
+
+## TV-less and dedicated-display requirements
 
 Every compatible game must be completely playable **without a dedicated TV/display client**. A game may use a shared browser, individual player devices, a combined host/player view, or another layout that preserves the complete experience without a separate display.
 
-A dedicated table display may still be supported and advertised with `capabilities.dedicatedDisplay`.
+A dedicated table display may be supported with `capabilities.dedicatedDisplay: true`. That promise requires a canonical public `BASE_PATH/board/` entrypoint, served by the same supervised runtime and private port. The board may present game-owned room selection or pairing before it attaches to a session, but it must not be a required device or contain controls/information necessary for complete TV-less play.
+
+## Nexus player-presentation handoff
+
+Nexus may later offer a browser-local presentation profile with an editable, non-unique display name and an opaque Nexus browser/profile identifier. The minimal game-facing handoff is **only an optional display-name suggestion**; games may use it as a default in their own create/join UI and must continue to work when it is absent.
+
+The opaque Nexus profile identifier is never supplied as a game seat, room, reconnect credential, or authorization token. A game must issue and validate its own identity and recovery authority. Nexus's future profile UX and transport details are platform-owned and may evolve independently; until that UX exists, games must not rely on a Nexus profile being present.
+
+## Compatibility verification
+
+Nexus supplies a reusable observable-seam check in `src/game-compatibility.js`. `verifyPublicGameCompatibility` verifies a successful HTTP response at the public player landing page and, when `capabilities.dedicatedDisplay` is `true`, `BASE_PATH/board/`. It follows at most five navigation redirects per route (301, 302, 303, 307, or 308), only on the same public origin under that game's base path and through routes accepted by Nexus's public path parser. Reserved management routes, ambiguous encoded paths, and URLs containing credentials are rejected before being fetched. Each request has a five-second deadline, configurable with `requestTimeoutMs`, and response bodies are canceled after headers are checked.
+
+This check proves route availability and redirect containment only. It does not inspect page contents or establish asset delivery, browser transport/recovery, TV-less completeness, session behavior, or game authorization. It is an explicit adapter acceptance tool, not an automatic registry or runtime-readiness gate.
+
+Use this check after launching an adapter through Nexus. Each game must also provide focused verification for game-owned behavior that Nexus cannot safely infer: server-authoritative state, join/create UX where applicable, reconnect recovery, TV-less completeness, and any room/board pairing semantics. The supervisor and readiness tests cover the shared launch, private binding, status, and shutdown seam.
+
+## Clean shutdown and lifecycle
+
+On the supported Linux runtime, a game must handle `SIGTERM` by stopping listeners and runtime-owned helpers and releasing its assigned private port promptly. Helpers must remain in Nexus's lifecycle boundary and preserve `NEXUS_LIFECYCLE_TOKEN` as described below. Nexus may force termination after its grace period; that fallback is not normal compatibility behavior.
 
 ## What Nexus does not standardize
 
-Games remain free to choose their own transport, lobby/room model, engine structure, game-state representation, frontend framework, package manager, persistence model, and dedicated-display behavior.
+Games remain free to choose their transport, exact lobby/room protocol, engine structure, state representation, frontend framework, package manager, persistence model, reconnect-token format, and dedicated-display contents or pairing flow.
 
 If Nexus needs game-specific branches to understand those concepts, the integration boundary has become too wide.
 

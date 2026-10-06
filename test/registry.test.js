@@ -6,7 +6,7 @@ import test from "node:test";
 import { CURRENT_GAME_SCHEMA, loadLibrary, parseManifest, toPublicGame } from "../src/registry.js";
 
 const validManifest = Object.freeze({
-  schema: 2,
+  schema: 3,
   id: "fixture-game",
   name: "Fixture Game",
   description: "Original test fixture.",
@@ -25,22 +25,27 @@ function cloneManifest(overrides = {}) {
   };
 }
 
-test("parseManifest accepts schema 2 without a configurable readiness path", () => {
+test("parseManifest accepts schema 3 without a configurable readiness path", () => {
   const manifest = parseManifest(cloneManifest());
-  assert.equal(CURRENT_GAME_SCHEMA, 2);
+  assert.equal(CURRENT_GAME_SCHEMA, 3);
   assert.equal(manifest.id, "fixture-game");
   assert.equal("healthPath" in manifest.runtime, false);
 });
 
-test("parseManifest rejects the former schema-1 contract instead of redefining it", () => {
+test("parseManifest rejects the former schema-2 contract instead of redefining it", () => {
   const oldManifest = cloneManifest({
-    schema: 1,
-    runtime: { command: "node", args: ["server.js"], healthPath: "/healthz" },
+    schema: 2,
   });
-  assert.throws(() => parseManifest(oldManifest), /manifest\.schema must be 2/);
+  assert.throws(() => parseManifest(oldManifest), /manifest\.schema must be 3/);
 });
 
-test("parseManifest ignores a legacy-looking runtime.healthPath field under schema 2 because readiness is fixed by contract", () => {
+test("parseManifest accepts only the current integer manifest schema", () => {
+  for (const schema of [undefined, 1, "3", 4]) {
+    assert.throws(() => parseManifest(cloneManifest({ schema })), /manifest\.schema must be 3/);
+  }
+});
+
+test("parseManifest ignores a legacy-looking runtime.healthPath field under schema 3 because readiness is fixed by contract", () => {
   const manifest = parseManifest(cloneManifest({
     runtime: { command: "node", args: ["server.js"], healthPath: "/not-used" },
   }));
@@ -48,7 +53,47 @@ test("parseManifest ignores a legacy-looking runtime.healthPath field under sche
 });
 
 test("parseManifest rejects missing TV-less support", () => {
-  assert.throws(() => parseManifest(cloneManifest({ capabilities: { tvLess: false } })), /tvLess must be true/);
+  for (const tvLess of [undefined, false, "true", 1]) {
+    assert.throws(() => parseManifest(cloneManifest({ capabilities: { tvLess } })), /tvLess must be true/);
+  }
+});
+
+test("optional device capabilities must be boolean when present", () => {
+  for (const key of ["personalDevices", "dedicatedDisplay"]) {
+    for (const value of [undefined, false, true]) {
+      assert.doesNotThrow(() => parseManifest(cloneManifest({ capabilities: { tvLess: true, [key]: value } })));
+    }
+    for (const value of [null, "false", 0, {}]) {
+      assert.throws(() => parseManifest(cloneManifest({ capabilities: { tvLess: true, [key]: value } })),
+        new RegExp(`manifest.capabilities.${key} must be boolean`));
+    }
+  }
+});
+
+test("runtime launch values require an executable and an argument array", () => {
+  for (const command of [undefined, "", "  ", 1]) {
+    assert.throws(() => parseManifest(cloneManifest({ runtime: { command, args: [] } })), /command must be/);
+  }
+  for (const args of [undefined, "server.js", ["server.js", 1]]) {
+    assert.throws(() => parseManifest(cloneManifest({ runtime: { command: "node", args } })), /args must be/);
+  }
+});
+
+test("unknown manifest metadata is retained privately but never copied into public metadata", () => {
+  const manifest = parseManifest(cloneManifest({
+    launchToken: "secret-launch-token",
+    custom: { root: "secret-root" },
+    players: { min: 2, max: 4, private: "secret-player-field" },
+    capabilities: { tvLess: true, dedicatedDisplay: false, private: "secret-capability-field" },
+    runtime: { command: "node", args: ["--private"], healthPath: "/not-used" },
+  }));
+  assert.equal(manifest.custom.root, "secret-root");
+  assert.deepEqual(toPublicGame({ root: "secret-config-path", manifest }), {
+    id: "fixture-game", name: "Fixture Game", description: "Original test fixture.",
+    players: { min: 2, max: 4 },
+    capabilities: { tvLess: true, dedicatedDisplay: false },
+    status: "configured",
+  });
 });
 
 test("parseManifest rejects invalid player ranges", () => {

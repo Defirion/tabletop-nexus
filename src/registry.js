@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 
-export const CURRENT_GAME_SCHEMA = 2;
+export const CURRENT_GAME_SCHEMA = 3;
 const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 function assertRecord(value, label) {

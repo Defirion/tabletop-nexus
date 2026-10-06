@@ -8,6 +8,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { loadLibrary } from "../src/registry.js";
+import { verifyPublicGameCompatibility } from "../src/game-compatibility.js";
 import { RuntimeSupervisor } from "../src/runtime/supervisor.js";
 import { createNexusServer } from "../src/server.js";
 
@@ -199,6 +200,27 @@ test("single-port HTTP routing strips BASE_PATH and preserves ordinary game rout
   assert.equal((await fetch(`${origin}/games/not-registered/`)).status, 404);
 });
 
+test("reusable public compatibility check verifies the landing and advertised board routes", async (t) => {
+  const { origin } = await startRoutingFixture(t);
+  const result = await verifyPublicGameCompatibility({
+    origin,
+    game: { manifest: {
+      id: "runtime-fixture",
+      capabilities: { tvLess: true, dedicatedDisplay: true },
+    } },
+  });
+  assert.deepEqual(result, {
+    playerLanding: {
+      url: `${origin}/games/runtime-fixture/`,
+      status: 200,
+    },
+    dedicatedDisplay: {
+      url: `${origin}/games/runtime-fixture/board/`,
+      status: 200,
+    },
+  });
+});
+
 test("reserved management namespace and ambiguous canonicalization variants never reach the runtime", async (t) => {
   const { origin, supervisor } = await startRoutingFixture(t);
   const routes = [
@@ -260,7 +282,7 @@ test("a reloaded game ID with a different installed identity is unavailable to t
   });
 
   await writeFile(join(replacementRoot, "boardgame.json"), JSON.stringify({
-    schema: 2,
+    schema: 3,
     id: "runtime-fixture",
     name: "Replacement Fixture",
     players: { min: 1, max: 4 },
@@ -281,7 +303,7 @@ test("unknown manifest fields do not change an active runtime identity", async (
   const gameRoot = join(root, "game");
   const manifestPath = join(gameRoot, "boardgame.json");
   const manifest = {
-    schema: 2,
+    schema: 3,
     id: "runtime-fixture",
     name: "Runtime Fixture",
     players: { min: 1, max: 4 },

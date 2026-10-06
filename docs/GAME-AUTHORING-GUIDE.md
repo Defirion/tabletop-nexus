@@ -1,7 +1,7 @@
 # Nexus Game Authoring Guide
 
-**Status:** Draft planning guidance  
-**Authority:** `GAME-CONTRACT.md` is the currently implemented normative compatibility contract. This guide records both the R1 runtime/readiness requirements already promoted into schema 2 and the remaining decisions selected for a later contract revision. Items marked `STANDARDIZE NOW` that are not already present in `GAME-CONTRACT.md` are not binding until the contract/schema, validator, and tests are migrated together.
+**Status:** Authoring guidance
+**Authority:** `GAME-CONTRACT.md` is the normative compatibility contract. The decisions formerly recorded here for a later contract revision were promoted together in manifest schema 3. This guide explains their intent; it does not supersede the contract or add requirements beyond it.
 
 Related architecture documents:
 
@@ -34,13 +34,13 @@ For any proposed new common rule, ask:
 
 If yes, consider standardizing the behavior. If no, leave it game-owned.
 
-## Decisions selected for the next contract revision
+## Decisions promoted in schema 3
 
-The R1 contract migration has already promoted the launch environment/private-bind and fixed readiness requirements into schema 2. The remaining decisions below are settled planning input for the pre-R3 contract gate. Requirements that are not already normative in `GAME-CONTRACT.md` should be promoted together with corresponding validator/compatibility tests rather than changing the contract in isolation.
+The R1 contract migration promoted the launch environment/private-bind and fixed readiness requirements into schema 2. The pre-R3 contract gate promoted the remaining selected requirements below into schema 3 together with validator and compatibility coverage. `GAME-CONTRACT.md` is the source of normative wording.
 
-### STANDARDIZE NOW
+### NOW NORMATIVE
 
-A future Nexus-compatible game should be required to provide this common shape:
+A schema-3 Nexus-compatible game provides this common shape:
 
 - one Nexus-supervised production runtime;
 - one Nexus-assigned private browser-facing port;
@@ -95,13 +95,13 @@ A richer Nexus status surface is intentionally not required now. The fixed readi
 
 The baseline game contract also does **not** promise games a trustworthy public client IP or a particular forwarded-client header. Nexus owns transport-level client attribution and platform abuse controls. If trusted client attribution is ever exposed to games, it should be an explicit future contract rather than an accidental dependency on `X-Forwarded-For`, `CF-Connecting-IP`, or similar headers.
 
-## Current implemented seam and migration gates
+## Current implemented seam
 
-`GAME-CONTRACT.md` and `src/registry.js` now define/enforce manifest schema 2. R1 explicitly retired manifest schema 1 instead of redefining it in place: schema 2 removes configurable `runtime.healthPath`, requires the Nexus launch environment/private bind behavior, and uses the fixed private `GET /__nexus/status` readiness surface. Readiness payload schema 2 additionally requires the per-launch association token so a valid-looking process that wins the probe-to-bind race cannot be mistaken for the runtime Nexus launched. The runtime supervisor implements that launch/readiness/lifecycle seam and the one-active-game policy.
+`GAME-CONTRACT.md` and `src/registry.js` now define/enforce manifest schema 3. R1 explicitly retired manifest schema 1 in favor of schema 2, which removed configurable `runtime.healthPath`, required the Nexus launch environment/private bind behavior, and uses the fixed private `GET /__nexus/status` readiness surface. Schema 3 then promotes the remaining browser/session behavior without changing the private status-payload schema. Readiness payload schema 2 requires the per-launch association token so a valid-looking process that wins the probe-to-bind race cannot be mistaken for the runtime Nexus launched. The runtime supervisor implements that launch/readiness/lifecycle seam and the one-active-game policy.
 
-`capabilities.dedicatedDisplay` remains descriptive metadata only. Schema 2 does **not** currently require `BASE_PATH/board/`, nor does it yet promote the remaining browser/session/shared-state requirements in this guide. Those remaining requirements belong in the pre-R3 contract gate with any further schema decision, validator changes, and reusable compatibility tests. `docs/PLAN.md` records that gate.
+`capabilities.dedicatedDisplay: true` is now a schema-3 compatibility promise requiring `BASE_PATH/board/`. Schema 3 also promotes the browser/session/shared-state requirements summarized here. The reusable public-route check lives in `src/game-compatibility.js`; game adapters additionally verify game-owned session, recovery, and state behavior.
 
-Games migrating from manifest schema 1 must update their manifest to `schema: 2`, remove any dependency on Nexus consulting `runtime.healthPath`, consume the Nexus-provided launch environment, bind the assigned private endpoint, and implement `GET /__nexus/status` with readiness payload schema 2 as documented below.
+Games migrating from an earlier manifest schema must implement the promoted browser/session obligations before updating their manifest to `schema: 3`, remove any dependency on Nexus consulting `runtime.healthPath`, consume the Nexus-provided launch environment, bind the assigned private endpoint, and implement `GET /__nexus/status` with readiness payload schema 2 as documented below. Older configured manifests fail the current library load; there is no automatic upgrade. Temporarily remove a registration while its adapter is being migrated.
 
 ## Launch environment and private bind
 
@@ -438,7 +438,7 @@ Pirate Island is already close to the selected production shape:
 - `/healthz` for its own health semantics;
 - `HOST` and `PORT` already supported.
 
-Its main Nexus adaptation remains exact `BASE_PATH`/same-origin URL behavior plus the schema-2 fixed private `/__nexus/status` readiness surface, exact `NEXUS_LAUNCH_TOKEN` echo, and exact supplied-host binding. Its HTTP/SSE room model does not need to be rewritten. It does not need to invent a dedicated board view unless it chooses to advertise that optional capability.
+Its existing schema-2 adapter supplies the fixed private `/__nexus/status` surface with readiness payload schema 2, exact `NEXUS_LAUNCH_TOKEN` echo, and assigned-host binding. The schema-3 migration adds joinable-room discovery and local delivery of the required physics/browser assets, with real proxy checks of `BASE_PATH`/same-origin behavior and recovery. Its HTTP/SSE room model does not need to be rewritten. It does not need to invent a dedicated board view unless it chooses to advertise that optional capability.
 
 ### Captain Flip / Flippin Stories
 
@@ -452,7 +452,7 @@ Captain Flip already provides several of the selected player/session behaviors:
 
 Its development topology currently uses Vite plus a separate authoritative WebSocket process. The Nexus production adaptation should preserve those semantics while serving the built frontend and WebSocket endpoint from one supervised runtime/port.
 
-The normal game root should remain the player entrypoint, including the familiar room-browsing/create/join experience. A future Nexus presentation profile can supply a default display name, while Captain Flip continues to own reconnect tokens and seat identity.
+The normal game root should remain the player entrypoint, preserving room browsing/joining and adding game-owned table creation and complete phone hosting. A future Nexus presentation profile can supply a default display name, while Captain Flip continues to own reconnect tokens and seat identity.
 
 Captain Flip's existing TV/shared-board experience maps naturally to the future dedicated-display capability. Its canonical Nexus-facing entrypoint should be `BASE_PATH/board/`; the implementation may render the existing TV view there or redirect internally within `BASE_PATH`, while keeping session selection/pairing game-owned. The dedicated display remains useful but optional for complete play.
 

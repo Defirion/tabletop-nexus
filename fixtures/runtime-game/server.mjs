@@ -177,6 +177,7 @@ const server = createServer(async (request, response) => {
   }
 
   const ordinaryRoute = requestUrl.pathname === "/"
+    || requestUrl.pathname === "/board/"
     || requestUrl.pathname === "/api/echo"
     || requestUrl.pathname === "/api/100%25"
     || requestUrl.pathname === "/__nexusx/status"
