@@ -21,7 +21,7 @@ Games remain independent applications and repositories. Tabletop Nexus discovers
 
 **R2 single-port routing and the schema-3 adapter contract are implemented.** The current contract, local library discovery/validation, browser-safe `/api/games` output, minimal portal, private-port allocation, shell-free launch boundary, fixed readiness polling, lifecycle state, graceful/forced stop, one-active-game sequencing, and registered-game HTTP/WebSocket/SSE proxying are implemented. Public game routing strips `BASE_PATH` while reserving every canonical ASCII case form of the private `__nexus` first path segment.
 
-The N0 schema-3 baseline is finalized locally; [`docs/PLAN.md`](docs/PLAN.md) records its branch and verification status. Publication/integration into upstream `main` is separate. Real-game adapter acceptance and portal lifecycle controls remain N1/N2 work. The Windows verification gate skips six Linux-only lifecycle checks; Linux acceptance remains part of N1/N3.
+The N0 schema-3 baseline is finalized locally; [`docs/PLAN.md`](docs/PLAN.md) records its branch and verification status. Publication/integration into upstream `main` is separate. Real-game adapter acceptance remains N1 work. The first N2 portal slice now provides fixture-verified start/stop/switch controls, live lifecycle state, friendly failure summaries, and ready game/advertised-board links. Restart reconciliation, QR sharing, and optional profile/diagnostic work remain open. The Windows verification gate skips six Linux-only lifecycle checks; Linux acceptance remains part of N1/N3.
 
 See [`docs/PLAN.md`](docs/PLAN.md) for roadmap status and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for current component boundaries.
 
@@ -41,7 +41,9 @@ LAN clients
     v
 Tabletop Nexus :3000
     |-- /                     portal
-    |-- /api/games            configured game metadata
+    |-- /api/games            game metadata, state and ready links
+    |-- /api/games/<id>/start POST start/switch
+    |-- /api/games/<id>/stop   POST stop the expected active game
     |-- /games/<game-id>/...  HTTP/WebSocket/SSE reverse proxy
     |
     +-- R1 supervisor -> one selected private game runtime
@@ -66,6 +68,14 @@ npm start
 ```
 
 The default Nexus address is `http://localhost:3000`. `HOST`, `PORT`, and `NEXUS_CONFIG` can override the local server settings. A missing `nexus.config.json` is valid and produces an empty library.
+
+## Operating the LAN portal
+
+Choose **Start game**, then wait for **Running** and select **Open game**. A ready game advertising a dedicated display also offers **Open board display** at its canonical board route. Both links use the Nexus address you opened; open the portal using its LAN address when sharing links with another device.
+
+Use **Stop game** or **Switch to this game** to change runtimes. The portal asks you to confirm because the active game's current session ends for all players. Game-specific room, host and seat controls remain inside each game. Status refreshes automatically; **Refresh library** retries a failed load or picks up local configuration changes. If cleanup fails, retry Stop and check the Nexus host console before restarting anything.
+
+The portal is for a trusted LAN: anyone with access can operate its host controls. Remote play and separate private administration remain future work. Stop the active game before shutting down Nexus. This slice does not recover a surviving game after a Nexus crash/restart or promise saved rooms.
 
 ## Adding a game locally
 

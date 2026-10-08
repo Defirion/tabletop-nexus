@@ -8,7 +8,7 @@ This is the active project plan. The [previous plan](archive/PLAN-before-adoptio
 
 The baseline observations below are dated snapshots. Recheck source and working changes before implementation; historical commits, PR descriptions, and prior test counts are not fresh acceptance evidence.
 
-Updated 6 October 2026. Repository: `C:/Users/defir/Documents/fun_with_Copilot/tabletop-nexus`, `Defirion/tabletop-nexus`.
+Updated 8 October 2026. Repository: `C:/Users/defir/Documents/fun_with_Copilot/tabletop-nexus`, `Defirion/tabletop-nexus`.
 
 ## Outcome
 
@@ -67,6 +67,10 @@ Migration impact is explicit: schema-2 registrations (including the current Pira
 ## N2 — Finish library UX and restart resilience
 
 **Dependencies:** N1 for accepted game behavior; interface work may be prepared earlier against the fixture.
+
+**Status: first interface slice implemented locally, 8 October 2026**, on `codex/n2-portal-controls`. This work adds supervisor-backed lifecycle POSTs, current status polling, start/stop/switch/restart controls, session-ending confirmation, safe failure summaries, and ready Nexus-origin game/advertised-board links. Concurrent requests and stale active-game actions are rejected. Open links require the current installed runtime identity; removed/invalid registrations do not prevent targeted Stop. Unresolved cleanup keeps the active ownership summary and pauses new starts in the portal. The phone layout and keyboard focus behavior are exercised with the original fixture and browser checks; this does not establish real-game or real-device acceptance.
+
+Fresh `npm run verify`: 113 tests, 107 passed, six existing Linux-only checks skipped on Windows, no failures. New coverage includes actual fixture start/switch/stop and released listeners, Starting/Stopping visibility, bounded startup failure/recovery, unexpected exit, stale/concurrent requests, changed registration identity, public-data filtering, focused polling controls, confirmation, and connection-loss recovery. N2 remains incomplete: restart/crash reconciliation, QR sharing, an owned game-output diagnostic collector, optional profile transport/UX, metadata/artwork hooks, and final N1-backed acceptance remain open. Stop games before shutting down Nexus; this interface slice does not recover a surviving runtime after a platform crash/restart.
 
 ### Usable host and player surfaces
 
@@ -192,13 +196,13 @@ The deliberately selected stricter common game shape is now promoted into the no
 
 ## R4 — Library UX and resilience
 
-- [ ] Start/stop controls and visible lifecycle state.
+- [x] Start/stop controls and visible lifecycle state. (Fixture-backed N2 interface slice; final adapter acceptance remains pending.)
 - [ ] Friendly startup failures and logs.
 - [ ] Add the reusable Nexus player-presentation profile UX using the defined optional display-name handoff.
 - [ ] When the active game advertises dedicated-display support, offer an **Open board display** action/QR that opens its canonical `BASE_PATH/board/` entrypoint on an extra tablet, TV, monitor, or browser.
 - [ ] Game metadata/artwork hooks using only distributable assets.
 - [ ] Recover cleanly after Nexus restarts.
-- [ ] Mobile-friendly portal.
+- [x] Mobile-friendly portal. (Browser viewport and focus checks; representative real-device acceptance remains N3 work.)
 
 ## R5 — Public-project polish
 

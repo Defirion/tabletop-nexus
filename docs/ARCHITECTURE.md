@@ -38,10 +38,18 @@ Only schema-3 manifests are accepted; older configured games fail the library lo
 The Node HTTP server exposes:
 
 - `GET`/`HEAD /healthz` — Nexus health;
-- `GET`/`HEAD /api/games` — configured, validated game metadata;
+- `GET`/`HEAD /api/games` — configured, validated game metadata, current lifecycle state, ready public links, an allowlisted active-runtime summary, and whether a portal action is in progress;
+- `POST /api/games/<id>/start` — start a configured game or switch through the existing supervisor;
+- `POST /api/games/<id>/stop` — stop that game only if it is still active, including when its registration has been removed or local configuration is invalid;
 - an allowlisted static portal at `/`, `/app.js`, and `/styles.css`.
 
-R4 will connect lifecycle state and controls to the portal; the R1 supervisor itself is implemented independently of those UI routes.
+The portal connects start/stop/switch controls to the supervisor. It polls every second while visible, pauses controls and ready links when library refresh fails, and asks the host to confirm ending an active session before stop/switch/restart. Unchanged polling responses preserve focused DOM controls. Links use the current public Nexus origin; dedicated-display links appear only for an advertised capability on an identity-matched ready runtime. A changed runtime command/root cannot retain an Open link merely because the game ID matches.
+
+Lifecycle POSTs require `X-Nexus-Action: 1`. When present, `Origin` must match the HTTP request's Nexus origin and `Sec-Fetch-Site` must be `same-origin`; no CORS grant is provided. Start also requires `X-Nexus-Active-Game` equal to the currently observed active game ID (an empty value for no active game). This prevents a stale tab from switching away from a different active game. Repeated Start of the same identity-matched ready installation is idempotent. Overlapping portal actions return `409 LIFECYCLE_BUSY` rather than building a queue of browser requests. Targeted Stop checks the expected game ID inside the supervisor's serialized operation, so a queued switch cannot cause it to stop a different game.
+
+The public API never copies supervisor error strings or private runtime endpoints. Failures return stable error codes and a safe player/host summary; detailed action failures remain in the Nexus host console. A failed runtime whose cleanup is unresolved retains its active summary and offers Stop while the portal disables new starts. Runtime stdout/stderr collection remains future diagnostic work under the stdio ownership rule below.
+
+These are trusted LAN host controls: anyone who can use the portal can operate them, including same-origin game code. The custom header/origin checks prevent ordinary cross-origin browser submissions; they do not establish host identity or the separate private administration boundary required for remote play. N4 remains unsupported. Lifecycle state is in-memory, rooms remain game-owned, and crash/restart reconciliation is not implemented by this interface slice. Stop the game before shutting down Nexus; this change does not claim seamless restart or recovery of surviving runtime processes.
 
 ## Runtime components
 
