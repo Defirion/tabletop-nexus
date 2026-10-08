@@ -13,15 +13,27 @@
         <p class="eyebrow">Local game library</p>
         <h1>Tabletop Nexus</h1>
         <p class="lede">One LAN portal for independent browser tabletop games.</p>
+        <p class="host-note">Host controls · One game runs at a time. Stopping or switching ends its current session.</p>
       </header>
       <section aria-labelledby="library-title">
         <div class="section-heading">
           <h2 id="library-title">Games</h2>
           <span id="library-status" role="status">Loading…</span>
         </div>
-        <div id="games" class="games" aria-live="polite"></div>
+        <p id="action-feedback" role="status" aria-live="polite"></p>
+        <div id="runtime-status" class="runtime-status"></div>
+        <div id="games" class="games"></div>
+        <button id="refresh-library" type="button" class="secondary">Refresh library</button>
       </section>
     </main>
+    <dialog id="confirm-action" aria-labelledby="confirm-title" aria-describedby="confirm-description">
+      <h2 id="confirm-title">End the current session?</h2>
+      <p id="confirm-description"></p>
+      <div class="actions">
+        <button id="cancel-action" type="button" class="secondary" autofocus>Cancel</button>
+        <button id="continue-action" type="button">Continue</button>
+      </div>
+    </dialog>
     <script type="module" src="/app.js"></script>
   </body>
 </html>
