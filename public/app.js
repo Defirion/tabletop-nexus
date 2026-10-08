@@ -22,6 +22,8 @@ let unavailable = false;
 let lastRender = "";
 let refreshSequence = 0;
 let refreshInFlight = null;
+// Links whose QR code the host has expanded; keys are `<gameId>:play|board`.
+const shownQr = new Set();
 
 function textElement(tag, className, text) {
   const element = document.createElement(tag);
@@ -44,6 +46,44 @@ function gameLink(text, path, key) {
   link.href = new URL(path, window.location.origin).href;
   link.dataset.focusKey = key;
   return link;
+}
+
+function qrToggle(label, key) {
+  const shown = shownQr.has(key);
+  const button = textElement("button", "secondary", shown ? `Hide ${label} QR` : `Show ${label} QR`);
+  button.type = "button";
+  button.dataset.focusKey = `${key}-qr`;
+  button.setAttribute("aria-expanded", String(shown));
+  button.addEventListener("click", () => {
+    if (shownQr.has(key)) shownQr.delete(key); else shownQr.add(key);
+    render();
+  });
+  return button;
+}
+
+function qrPanel(label, href) {
+  const panel = document.createElement("figure");
+  panel.className = "qr-panel";
+  let source = "";
+  try {
+    source = globalThis.nexusQr.toDataUrl(href);
+  } catch {
+    panel.append(textElement("p", "error-state", "This link is too long to show as a QR code. Use the link directly."));
+    return panel;
+  }
+  const image = document.createElement("img");
+  image.className = "qr-code";
+  image.src = source;
+  image.alt = `QR code for the ${label} link`;
+  image.width = 220;
+  image.height = 220;
+  panel.append(image, textElement("figcaption", "qr-caption", href));
+  const host = new URL(href).hostname;
+  if (["localhost", "127.0.0.1", "[::1]"].includes(host) || host.endsWith(".localhost")) {
+    panel.append(textElement("p", "host-note",
+      "This portal was opened through a local-only address, so other devices cannot use this code. Open the portal at the host's LAN address, then show the QR code."));
+  }
+  return panel;
 }
 
 function renderGame(game, locked) {
@@ -70,16 +110,24 @@ function renderGame(game, locked) {
       game.id, "start", locked || cleanupRequired,
     ));
   }
+  const panels = [];
   if (game.playUrl && !locked) {
-    actions.append(gameLink("Open game", game.playUrl, `${game.id}:play`));
-    if (game.boardUrl) actions.append(gameLink("Open board display", game.boardUrl, `${game.id}:board`));
+    const links = [["game", "Open game", game.playUrl, "play"]];
+    if (game.boardUrl) links.push(["board display", "Open board display", game.boardUrl, "board"]);
+    for (const [label, text, path, kind] of links) {
+      const link = gameLink(text, path, `${game.id}:${kind}`);
+      actions.append(link);
+      if (!globalThis.nexusQr) continue;
+      actions.append(qrToggle(label, `${game.id}:${kind}`));
+      if (shownQr.has(`${game.id}:${kind}`)) panels.push(qrPanel(label, link.href));
+    }
   }
-  card.append(actions);
+  card.append(actions, ...panels);
   return card;
 }
 
 function render() {
-  const signature = JSON.stringify({ library, pending, unavailable });
+  const signature = JSON.stringify({ library, pending, unavailable, shownQr: [...shownQr] });
   // Leave focused controls in place on unchanged polling responses.
   if (signature === lastRender) return;
   lastRender = signature;

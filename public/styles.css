@@ -34,6 +34,9 @@ button:not(:disabled):hover, .game-link:hover { filter: brightness(1.15); }
 .status-starting, .status-stopping { background: #514522; color: #ffe4a0; }
 #action-feedback { min-height: 1.5rem; line-height: 1.5; color: #e8dfc2; }
 #refresh-library { margin-top: 1.5rem; }
+.qr-panel { margin: 1rem 0 0; padding: 1rem; border: 1px solid #4a463a; border-radius: .6rem; background: #1b1a16; }
+.qr-code { display: block; width: min(13.75rem, 100%); height: auto; aspect-ratio: 1; border-radius: .4rem; background: #fff; }
+.qr-caption { margin-top: .6rem; color: #b9b29f; font-size: .85rem; overflow-wrap: anywhere; }
 dialog { width: min(30rem, calc(100% - 2rem)); padding: 1.5rem; border: 1px solid #81775b; border-radius: .8rem; background: #22211c; color: #f7f4ec; }
 dialog::backdrop { background: #000a; }
 dialog p { line-height: 1.6; }

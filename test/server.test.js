@@ -35,7 +35,15 @@ test("server health and empty-library API are runnable without local config", as
 
   const portal = await fetch(`${origin}/`);
   assert.equal(portal.status, 200);
-  assert.match(await portal.text(), /Tabletop Nexus/);
+  const html = await portal.text();
+  assert.match(html, /Tabletop Nexus/);
+
+  // The portal's QR generator is served as a classic script ahead of app.js.
+  assert.ok(html.indexOf('src="/qr.js"') !== -1 && html.indexOf('src="/qr.js"') < html.indexOf('src="/app.js"'));
+  const qr = await fetch(`${origin}/qr.js`);
+  assert.equal(qr.status, 200);
+  assert.match(qr.headers.get("content-type"), /^text\/javascript/);
+  assert.match(await qr.text(), /globalThis\.nexusQr/);
 });
 
 test("server API never exposes configured paths, runtime commands, tokens, or unknown metadata", async (t) => {

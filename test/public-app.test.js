@@ -4,9 +4,10 @@ import test from "node:test";
 import { createContext, runInContext } from "node:vm";
 
 const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+const qrSource = await readFile(new URL("../public/qr.js", import.meta.url), "utf8");
 
 // Small DOM boundary double; behavior is exercised by the actual portal script.
-async function portal(initial) {
+async function portal(initial, { qr = false, origin = "http://nexus.test:3000" } = {}) {
   const nodes = new Map();
   const document = new EventTarget();
   class Element extends EventTarget {
@@ -39,7 +40,7 @@ async function portal(initial) {
   let actionHandler = null;
   const calls = [];
   const context = createContext({
-    document, window: { location: { origin: "http://nexus.test:3000" } }, URL,
+    document, window: { location: { origin } }, URL, TextEncoder,
     AbortSignal, setInterval() {}, fetch: async (path, options) => {
       calls.push({ path, options });
       if (networkError) throw new Error("offline");
@@ -50,6 +51,7 @@ async function portal(initial) {
       return { ok: true, json: async () => structuredClone(state) };
     },
   });
+  if (qr) runInContext(qrSource, context);
   runInContext(source, context);
   await runInContext("refresh()", context);
   return {
@@ -145,4 +147,50 @@ test("portal hides ready links during mutations, handles failure and refreshes t
   assert.match(p.text("action-feedback"), /game action failed/);
   assert.equal(p.text("action-feedback").includes("secret-command-token"), false);
   assert.equal(p.controls().find((node) => node.textContent === "Start game").disabled, false);
+});
+
+const running = (extra = {}) => library([game("game-a", {
+  status: "running", playUrl: "/games/game-a/", boardUrl: "/games/game-a/board/", ...extra,
+})], { gameId: "game-a", status: "running" });
+const walkAll = (node) => [node, ...node.children.flatMap(walkAll)];
+const images = (p) => walkAll(p.nodes.get("#games")).filter((node) => node.tagName === "img");
+
+test("portal offers QR codes only for ready same-origin links and hides them when locked", async () => {
+  const none = await portal(running());
+  assert.equal(none.controls().filter((node) => /QR/.test(node.textContent)).length, 0, "no QR without the generator");
+
+  const p = await portal(library([game()]), { qr: true });
+  assert.equal(p.controls().filter((node) => /QR/.test(node.textContent)).length, 0, "nothing to share before ready");
+
+  p.setState(running());
+  await p.refresh();
+  const toggles = p.controls().filter((node) => /QR/.test(node.textContent));
+  assert.deepEqual(toggles.map((node) => node.textContent), ["Show game QR", "Show board display QR"]);
+  assert.equal(images(p).length, 0);
+
+  toggles[0].dispatchEvent(new Event("click"));
+  assert.equal(images(p).length, 1);
+  assert.match(images(p)[0].src, /^data:image\/svg\+xml,%3Csvg/);
+  assert.equal(images(p)[0].alt, "QR code for the game link");
+  assert.match(p.text("games"), /http:\/\/nexus\.test:3000\/games\/game-a\/(?!board)/);
+  assert.ok(p.controls().find((node) => node.textContent === "Hide game QR"));
+  assert.doesNotMatch(p.text("games"), /local-only address/);
+
+  p.controls().find((node) => node.textContent === "Show board display QR").dispatchEvent(new Event("click"));
+  assert.equal(images(p).length, 2);
+  p.controls().find((node) => node.textContent === "Hide game QR").dispatchEvent(new Event("click"));
+  assert.equal(images(p).length, 1);
+
+  // Mutations and lost connections remove the links, and their QR codes with them.
+  p.setOffline(true);
+  await p.refresh();
+  assert.equal(images(p).length, 0);
+  assert.equal(p.controls().filter((node) => /QR/.test(node.textContent)).length, 0);
+});
+
+test("portal warns that a QR built from a loopback origin only works on the host", async () => {
+  const p = await portal(running(), { qr: true, origin: "http://localhost:3000" });
+  p.controls().find((node) => node.textContent === "Show game QR").dispatchEvent(new Event("click"));
+  assert.match(p.text("games"), /local-only address/);
+  assert.match(p.text("games"), /http:\/\/localhost:3000\/games\/game-a\//);
 });
