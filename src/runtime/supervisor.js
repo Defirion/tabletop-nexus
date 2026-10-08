@@ -184,8 +184,13 @@ export class RuntimeSupervisor {
     return this.#enqueue(() => this.#start(game));
   }
 
-  stop() {
-    return this.#enqueue(() => this.#stopActive());
+  stop(expectedGameId) {
+    return this.#enqueue(() => {
+      if (expectedGameId !== undefined && this.#active?.gameId !== expectedGameId) {
+        throw Object.assign(new Error("active game changed"), { code: "RUNTIME_CHANGED" });
+      }
+      return this.#stopActive();
+    });
   }
 
   #enqueue(operation) {

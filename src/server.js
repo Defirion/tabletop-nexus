@@ -25,10 +25,51 @@ function sendJson(response, status, body, method = "GET") {
   response.end(method === "HEAD" ? undefined : content);
 }
 
+function publicRuntime(supervisor) {
+  const runtime = supervisor.getActiveRuntime();
+  return runtime === null ? null : { gameId: runtime.gameId, status: runtime.status };
+}
+
+function publicGame(game, supervisor) {
+  const metadata = toPublicGame(game);
+  const state = supervisor.getState(metadata.id);
+  const runtime = supervisor.acquireActiveRuntime(game);
+  const ready = runtime !== null;
+  runtime?.release();
+  const basePath = `/games/${metadata.id}/`;
+  return {
+    ...metadata,
+    status: state.status,
+    ...(state.status === "failed" ? {
+      message: supervisor.getActiveRuntime()?.gameId === metadata.id
+        ? "Cleanup could not be confirmed. Retry Stop game. If it still fails, check the Nexus host console before restarting."
+        : "The game could not run. Try starting it again; if it still fails, check its setup on the Nexus host.",
+    } : {}),
+    ...(state.status === "running" && !ready ? {
+      message: "The game configuration changed. Restart the game to open it again.",
+    } : {}),
+    ...(ready ? {
+      playUrl: basePath,
+      ...(metadata.capabilities.dedicatedDisplay === true ? { boardUrl: `${basePath}board/` } : {}),
+    } : {}),
+  };
+}
+
+function isPortalAction(request) {
+  // No CORS grant: cross-origin browsers cannot supply this custom header.
+  // An Origin, when present, must also match this plain-HTTP LAN server.
+  return request.headers["x-nexus-action"] === "1"
+    && (request.headers.origin === undefined
+      || request.headers.origin === `http://${request.headers.host}`)
+    && (request.headers["sec-fetch-site"] === undefined
+      || request.headers["sec-fetch-site"] === "same-origin");
+}
+
 export function createNexusServer(configPath, {
   supervisor = new RuntimeSupervisor(),
 } = {}) {
   const proxy = createGameProxy({ configPath, loadLibrary, supervisor });
+  let busy = false;
   const server = createServer(async (request, response) => {
     try {
       const method = request.method ?? "GET";
@@ -46,7 +87,61 @@ export function createNexusServer(configPath, {
 
       if ((method === "GET" || method === "HEAD") && url.pathname === "/api/games") {
         const games = await loadLibrary(configPath);
-        sendJson(response, 200, { games: games.map(toPublicGame) }, method);
+        sendJson(response, 200, {
+          games: games.map((game) => publicGame(game, supervisor)),
+          runtime: publicRuntime(supervisor),
+          busy,
+        }, method);
+        return;
+      }
+
+      // Match the raw target: encoded IDs, dot segments and path aliases must
+      // never normalize into a lifecycle action.
+      const action = /^\/api\/games\/([a-z0-9]+(?:-[a-z0-9]+)*)\/(start|stop)$/.exec(request.url ?? "");
+      if (method === "POST" && action !== null) {
+        if (!isPortalAction(request)) {
+          sendJson(response, 403, { error: "ACTION_FORBIDDEN" });
+          return;
+        }
+        if (busy) {
+          sendJson(response, 409, { error: "LIFECYCLE_BUSY" });
+          return;
+        }
+        busy = true;
+        try {
+          const [, gameId, operation] = action;
+          if (operation === "start") {
+            const games = await loadLibrary(configPath);
+            const game = games.find((entry) => entry.manifest.id === gameId);
+            if (game === undefined) {
+              sendJson(response, 404, { error: "GAME_NOT_FOUND" });
+              return;
+            }
+            const active = supervisor.getActiveRuntime();
+            if (request.headers["x-nexus-active-game"] !== (active?.gameId ?? "")) {
+              sendJson(response, 409, { error: "RUNTIME_CHANGED" });
+              return;
+            }
+            // Repeated Start on the same ready installation is idempotent.
+            const runtime = supervisor.acquireActiveRuntime(game);
+            if (runtime !== null) runtime.release();
+            else await supervisor.start(game);
+            sendJson(response, 200, { game: publicGame(game, supervisor) });
+          } else {
+            // Stop remains available even if local configuration is now invalid
+            // or the active registration was removed. Check inside the queue.
+            await supervisor.stop(gameId);
+            sendJson(response, 200, { gameId, status: "stopped" });
+          }
+        } catch (error) {
+          const changed = error?.code === "RUNTIME_CHANGED";
+          if (!changed) console.error(error);
+          sendJson(response, changed ? 409 : 503, {
+            error: changed ? "RUNTIME_CHANGED" : "LIFECYCLE_FAILED",
+          });
+        } finally {
+          busy = false;
+        }
         return;
       }
 

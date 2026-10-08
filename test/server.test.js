@@ -31,7 +31,7 @@ test("server health and empty-library API are runnable without local config", as
 
   const library = await fetch(`${origin}/api/games`);
   assert.equal(library.status, 200);
-  assert.deepEqual(await library.json(), { games: [] });
+  assert.deepEqual(await library.json(), { games: [], runtime: null, busy: false });
 
   const portal = await fetch(`${origin}/`);
   assert.equal(portal.status, 200);
@@ -78,6 +78,8 @@ test("server API never exposes configured paths, runtime commands, tokens, or un
       capabilities: { tvLess: true },
       status: "configured",
     }],
+    runtime: null,
+    busy: false,
   });
 });
 
