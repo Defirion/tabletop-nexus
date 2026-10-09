@@ -29,6 +29,8 @@ let library = { games: [], runtime: null, busy: false };
 let pending = null;
 let unavailable = false;
 let lastRender = "";
+// Game this tab last tried to start; only its failure keeps it on the table, not an older one.
+let lastStarted = null;
 let refreshSequence = 0;
 let refreshInFlight = null;
 // QR ticket (`<gameId>:play|board`) whose link was just copied; it shows a stamp briefly.
@@ -245,11 +247,11 @@ function dropZone() {
   return zone;
 }
 
-// The game on the table: the active runtime's game, or else one whose start just failed.
+// The game on the table: the active runtime's game, or else the last one started here if it failed.
 function tableGame() {
   return library.games.find((game) => game.id === library.runtime?.gameId)
     ?? library.games.find((game) => game.id === pending?.gameId && pending.operation === "start")
-    ?? library.games.find((game) => game.status === "failed")
+    ?? library.games.find((game) => game.id === lastStarted && game.status === "failed")
     ?? null;
 }
 
@@ -328,7 +330,7 @@ function banner(text, bad) {
 }
 
 function render() {
-  const signature = JSON.stringify({ library, pending, unavailable, copied });
+  const signature = JSON.stringify({ library, pending, unavailable, copied, lastStarted });
   // Leave focused controls in place on unchanged polling responses.
   if (signature === lastRender) return;
   lastRender = signature;
@@ -423,6 +425,7 @@ async function runAction(gameId, operation) {
   const activeGameId = library.runtime?.gameId ?? "";
   if (activeGameId && !await confirmEndSession(gameId, operation)) return;
   pending = { gameId, operation };
+  if (operation === "start") lastStarted = gameId;
   // Discard any response captured before this mutation began.
   refreshSequence += 1;
   feedbackRoot.textContent = operation === "start" ? "Starting game…" : "Stopping game…";

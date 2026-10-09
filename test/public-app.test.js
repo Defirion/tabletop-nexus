@@ -150,6 +150,29 @@ test("portal hides ready links during mutations, handles failure and refreshes t
   assert.equal(p.controls().find((node) => node.textContent === "Start game").disabled, false);
 });
 
+test("portal keeps a failed start on the table only until another game is started", async () => {
+  const failed = game("game-a", { status: "failed", message: "The game could not run." });
+  const p = await portal(library([game(), game("game-b")]));
+  p.setActionResponse({ ok: false, payload: { error: "LIFECYCLE_FAILED" } });
+  p.setActionHandler(() => p.setState(library([failed, game("game-b")])));
+  await p.act("game-a", "start");
+  assert.match(p.text("table"), /Didn’t start/);
+
+  p.setActionResponse({ ok: true, payload: {} });
+  p.setActionHandler(() => p.setState(library([failed, game("game-b", { status: "running", playUrl: "/games/game-b/" })],
+    { gameId: "game-b", status: "running" })));
+  await p.act("game-b", "start");
+  assert.doesNotMatch(p.text("table"), /Didn’t start/);
+
+  // The server keeps game-a's earlier failure; stopping game-b must not put it back on the table.
+  const stop = p.act("game-b", "stop");
+  p.setActionHandler(() => p.setState(library([failed, game("game-b", { status: "stopped" })])));
+  p.nodes.get("#continue-action").dispatchEvent(new Event("click"));
+  await stop;
+  assert.match(p.text("table"), /Nothing on the table/);
+  assert.match(p.text("games"), /The game could not run/, "the old failure stays on its library tag");
+});
+
 const running = (extra = {}) => library([game("game-a", {
   status: "running", playUrl: "/games/game-a/", boardUrl: "/games/game-a/board/", ...extra,
 })], { gameId: "game-a", status: "running" });
