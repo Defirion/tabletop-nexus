@@ -63,6 +63,33 @@ export class PrivatePortAllocator {
     this.#createProbe = createProbe;
   }
 
+  /**
+   * Reserves a specific port that a previous Nexus run's runtime may still hold,
+   * so a new allocation cannot be handed the same number before its owner is
+   * confirmed gone. Returns null when this process already claims the port.
+   */
+  claim(port) {
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      throw new TypeError("port must be a valid TCP port number");
+    }
+    if (this.#claimedPorts.has(port)) {
+      return null;
+    }
+    this.#claimedPorts.add(port);
+    let active = true;
+    return Object.freeze({
+      host: PRIVATE_GAME_HOST,
+      port,
+      release: () => {
+        if (!active) {
+          return false;
+        }
+        active = false;
+        return this.#claimedPorts.delete(port);
+      },
+    });
+  }
+
   async allocate() {
     while (true) {
       const probe = await this.#createProbe();

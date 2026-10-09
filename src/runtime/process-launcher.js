@@ -266,6 +266,37 @@ async function waitForHostedRuntimeMembersExit(processGroup, dependencies) {
   }
 }
 
+const OWNERSHIP_KIND_LINUX_PROCESS_GROUP = "linux-process-group";
+
+function parseOwnershipRecord(record) {
+  if (
+    record === null ||
+    typeof record !== "object" ||
+    record.kind !== OWNERSHIP_KIND_LINUX_PROCESS_GROUP ||
+    typeof record.lifecycleToken !== "string" ||
+    record.lifecycleToken.length === 0 ||
+    !Number.isInteger(record.processGroupId) ||
+    record.processGroupId <= 1 ||
+    record.controllerPid !== record.processGroupId
+  ) {
+    throw new TypeError("unsupported or malformed runtime ownership record");
+  }
+  return Object.freeze({
+    id: record.processGroupId,
+    controllerPid: record.controllerPid,
+    lifecycleToken: record.lifecycleToken,
+  });
+}
+
+function controllerIsLive(processGroup, { readProcFile }) {
+  const metadata = readLinuxProcessMetadata(String(processGroup.controllerPid), readProcFile);
+  return metadata !== null
+    && metadata.processGroup === processGroup.id
+    && metadata.state !== "Z"
+    && metadata.state !== "X"
+    && processHasLifecycleToken(metadata.pid, processGroup.lifecycleToken, readProcFile);
+}
+
 function sendRootSignal(child, signal) {
   if (childHasExited(child)) {
     return false;
@@ -532,6 +563,7 @@ function createLocalProcessLauncher({
   readProcFile,
   createLifecycleToken,
   beforeGroupSignal,
+  orphanGracePeriodMs,
 }) {
   if (typeof spawn !== "function") {
     throw new TypeError("spawn must be a function");
@@ -563,7 +595,40 @@ function createLocalProcessLauncher({
 
   return Object.freeze({
     securityBoundary: GAME_LAUNCH_SECURITY_BOUNDARY.SAME_OS_IDENTITY,
-    launch(spec) {
+    recoverable: ownProcessGroup,
+    /**
+     * Read-only check of whether a previous Nexus run's runtime generation is
+     * still alive. It never signals anything: a process counts only when both its
+     * process group and its inherited lifecycle token match the recorded
+     * generation, so a recycled numeric identifier is never mistaken for residue.
+     * Any inspection uncertainty is reported as "ambiguous", never as "absent".
+     */
+    inspectRecovery(record) {
+      let processGroup;
+      try {
+        if (!ownProcessGroup || process.platform !== "linux") {
+          throw new Error("runtime ownership cannot be verified on this platform");
+        }
+        processGroup = parseOwnershipRecord(record);
+      } catch (error) {
+        return Object.freeze({ state: "ambiguous", detail: error.message });
+      }
+      try {
+        if (!defaultProcessGroupExists(processGroup, dependencies, { ownedOnly: true })) {
+          return Object.freeze({ state: "absent" });
+        }
+        return Object.freeze({
+          state: "present",
+          controllerLive: controllerIsLive(processGroup, dependencies),
+        });
+      } catch (error) {
+        return Object.freeze({
+          state: "ambiguous",
+          detail: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
+    launch(spec, { recordOwnership } = {}) {
       if (ownProcessGroup) {
         const lifecycleToken = createLifecycleToken();
         if (typeof lifecycleToken !== "string" || lifecycleToken.length === 0) {
@@ -579,7 +644,7 @@ function createLocalProcessLauncher({
           args: [...spec.args],
           cwd: spec.cwd,
         });
-        const child = spawn(process.execPath, [PROCESS_GROUP_HOST_PATH, hostSpec], {
+        const child = spawn(process.execPath, [PROCESS_GROUP_HOST_PATH, hostSpec, String(orphanGracePeriodMs)], {
           cwd: spec.cwd,
           shell: false,
           env: environment,
@@ -607,6 +672,25 @@ function createLocalProcessLauncher({
               processKill === process.kill ? null : processKill,
             ),
           );
+          // The controller launches nothing until this generation's identity is
+          // durably recorded. If recording fails, closing the channel makes the
+          // still-empty controller exit and the launch fails closed.
+          try {
+            recordOwnership?.(Object.freeze({
+              kind: OWNERSHIP_KIND_LINUX_PROCESS_GROUP,
+              lifecycleToken,
+              processGroupId: processGroup.id,
+              controllerPid: processGroup.controllerPid,
+            }));
+          } catch (error) {
+            child.disconnect?.();
+            throw error;
+          }
+          child.send({ type: "start" }, (error) => {
+            if (error) {
+              child.disconnect?.();
+            }
+          });
         }
         return child;
       }
@@ -719,6 +803,7 @@ export function createLocalGameProcessLauncher({
   readProcFile = readFileSync,
   createLifecycleToken = () => randomBytes(32).toString("hex"),
   beforeGroupSignal = () => undefined,
+  orphanGracePeriodMs = 5_000,
   ownProcessGroup = process.platform === "linux" && (spawn === nodeSpawn || processKill !== process.kill),
 } = {}) {
   return createLocalProcessLauncher({
@@ -733,6 +818,7 @@ export function createLocalGameProcessLauncher({
     readProcFile,
     createLifecycleToken,
     beforeGroupSignal,
+    orphanGracePeriodMs,
   });
 }
 
@@ -747,7 +833,12 @@ export function createLocalGameProcessLauncher({
  */
 export function launchGameProcess(
   game,
-  { launcher, environment = {}, requireDistinctSecurityBoundary = false } = {},
+  {
+    launcher,
+    environment = {},
+    requireDistinctSecurityBoundary = false,
+    recordOwnership = undefined,
+  } = {},
 ) {
   if (typeof requireDistinctSecurityBoundary !== "boolean") {
     throw new TypeError("requireDistinctSecurityBoundary must be a boolean");
@@ -761,7 +852,10 @@ export function launchGameProcess(
     throw new Error("game launch requires a distinct security identity or sandbox boundary");
   }
 
-  return launcher.launch(createLaunchSpec(game, environment));
+  const spec = createLaunchSpec(game, environment);
+  return recordOwnership === undefined
+    ? launcher.launch(spec)
+    : launcher.launch(spec, { recordOwnership });
 }
 
 /**
@@ -770,13 +864,19 @@ export function launchGameProcess(
  */
 export function launchSupervisedGameProcess(
   game,
-  { launcher, environment = {}, requireDistinctSecurityBoundary = false } = {},
+  {
+    launcher,
+    environment = {},
+    requireDistinctSecurityBoundary = false,
+    recordOwnership = undefined,
+  } = {},
 ) {
   assertLauncher(launcher, { lifecycle: true });
   const handle = launchGameProcess(game, {
     launcher,
     environment,
     requireDistinctSecurityBoundary,
+    recordOwnership,
   });
 
   return Object.freeze({
@@ -810,6 +910,7 @@ export function launchLocalGameProcess(
       readProcFile: readFileSync,
       createLifecycleToken: () => randomBytes(32).toString("hex"),
       beforeGroupSignal: () => undefined,
+      orphanGracePeriodMs: 5_000,
     }),
     environment,
   });

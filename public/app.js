@@ -15,6 +15,7 @@ const errors = {
   GAME_NOT_FOUND: "This game is no longer in the library. Refresh and choose another game.",
   LIFECYCLE_BUSY: "Another game action is in progress. Wait for its status to update.",
   RUNTIME_CHANGED: "The active game changed. Review its current status and try again.",
+  RECOVERY_BLOCKED: "Nexus cannot start a game until it has sorted out a runtime record left by its previous run. See the notice above and the Nexus host console.",
   LIFECYCLE_FAILED: "The game action failed. Review its status below; further details are in the Nexus host console.",
 };
 // Fixed tilt per library slot, so the loose scatter of boxes is stable across renders.
@@ -103,7 +104,7 @@ function cover(game, title) {
 
 function controls(game, locked) {
   const isActive = library.runtime?.gameId === game.id;
-  const cleanupRequired = library.runtime?.status === "failed";
+  const cleanupRequired = library.runtime?.status === "failed" || Boolean(library.recovery);
   const buttons = [];
   if (isActive) buttons.push(actionButton("Stop game", game.id, "stop", locked));
   if (!isActive || (game.status === "running" && !game.playUrl)) {
@@ -353,7 +354,14 @@ function render() {
     if (library.runtime) note.append(actionButton("Retry stop active game", library.runtime.gameId, "stop", pending !== null));
     runtimeRoot.append(note);
   }
-  if (library.runtime?.status === "failed") {
+  if (library.recovery) {
+    runtimeRoot.append(banner(`${library.recovery.message} Starting a game is paused until this is resolved.`, true));
+  }
+  if (library.runtime?.recovered) {
+    runtimeRoot.append(library.runtime.status === "failed"
+      ? banner("Nexus restarted while a game was running, and the leftover game could not be confirmed stopped. Starting another game is paused until its processes are gone; the Nexus host console says what to stop.", true)
+      : banner("Nexus restarted while a game was running. It is waiting for that old session to finish shutting down."));
+  } else if (library.runtime?.status === "failed") {
     runtimeRoot.append(banner(
       "Cleanup is unresolved. Retry Stop game; check the Nexus host console if it keeps failing. Starting another game is paused.", true));
   }

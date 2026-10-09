@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createGameProxy, parsePublicGameRoute } from "./game-proxy.js";
 import { loadLibrary, toPublicGame } from "./registry.js";
+import { FileOwnershipJournal } from "./runtime/ownership-journal.js";
 import { RuntimeSupervisor } from "./runtime/supervisor.js";
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
@@ -35,7 +36,19 @@ function sendJson(response, status, body, method = "GET") {
 
 function publicRuntime(supervisor) {
   const runtime = supervisor.getActiveRuntime();
-  return runtime === null ? null : { gameId: runtime.gameId, status: runtime.status };
+  return runtime === null ? null : {
+    gameId: runtime.gameId,
+    status: runtime.status,
+    ...(runtime.recovered === true ? { recovered: true } : {}),
+  };
+}
+
+// Host-facing wording for a runtime left behind by a previous Nexus process.
+// Process ids, paths and ownership evidence stay in the host console.
+function recoveredMessage(status) {
+  return status === "failed"
+    ? "Nexus restarted while this game was running, and its leftover processes could not be confirmed stopped. Nexus will not start another game until they are gone. Stop them on the Nexus host (see its console); this clears by itself once they exit."
+    : "Nexus restarted while this game was running. Nexus is waiting for the leftover session to finish shutting down; this ends the old session for its players.";
 }
 
 function publicGame(game, supervisor) {
@@ -48,7 +61,9 @@ function publicGame(game, supervisor) {
   return {
     ...metadata,
     status: state.status,
-    ...(state.status === "failed" ? {
+    ...(state.recovered === true && (state.status === "failed" || state.status === "stopping") ? {
+      message: recoveredMessage(state.status),
+    } : state.status === "failed" ? {
       message: supervisor.getActiveRuntime()?.gameId === metadata.id
         ? "Cleanup could not be confirmed. Retry Stop game. If it still fails, check the Nexus host console before restarting."
         : "The game could not run. Try starting it again; if it still fails, check its setup on the Nexus host.",
@@ -98,6 +113,12 @@ export function createNexusServer(configPath, {
         sendJson(response, 200, {
           games: games.map((game) => publicGame(game, supervisor)),
           runtime: publicRuntime(supervisor),
+          ...((supervisor.getRecovery?.() ?? null) === null ? {} : {
+            recovery: {
+              status: "blocked",
+              message: "Nexus found a runtime record from a previous run that it cannot interpret, so it will not start a game. Check the Nexus host console for what to clear.",
+            },
+          }),
           busy,
         }, method);
         return;
@@ -143,9 +164,10 @@ export function createNexusServer(configPath, {
           }
         } catch (error) {
           const changed = error?.code === "RUNTIME_CHANGED";
+          const blocked = error?.code === "RECOVERY_BLOCKED";
           if (!changed) console.error(error);
-          sendJson(response, changed ? 409 : 503, {
-            error: changed ? "RUNTIME_CHANGED" : "LIFECYCLE_FAILED",
+          sendJson(response, changed || blocked ? 409 : 503, {
+            error: changed ? "RUNTIME_CHANGED" : blocked ? "RECOVERY_BLOCKED" : "LIFECYCLE_FAILED",
           });
         } finally {
           busy = false;
@@ -199,6 +221,9 @@ export async function startNexusServer({
     throw new Error(`Invalid PORT: ${port}`);
   }
 
+  // Establish what a previous Nexus process left behind before serving any
+  // lifecycle state, so the portal's first answer is already truthful.
+  await supervisor.recover?.();
   const server = createNexusServer(resolve(configPath), { supervisor });
   await new Promise((resolveListen, reject) => {
     server.once("error", reject);
@@ -207,11 +232,52 @@ export async function startNexusServer({
   return server;
 }
 
+/**
+ * Orderly shutdown: stop accepting connections, end the active game through the
+ * normal supervised stop (so no runtime is left behind), then drop connections.
+ * A game that cannot be confirmed stopped is reported; the next start verifies
+ * it against its ownership record.
+ */
+export async function shutdownNexus(server, supervisor) {
+  const closed = new Promise((resolveClose) => server.close(resolveClose));
+  server.closeIdleConnections?.();
+  // A keep-alive request may start a game while the first stop is running, so
+  // the stop is repeated once the queue has drained.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await supervisor.stop();
+    } catch (error) {
+      console.error("Could not confirm the active game stopped during shutdown:", error);
+    }
+  }
+  server.closeAllConnections?.();
+  await closed;
+}
+
 async function main() {
   const host = process.env.HOST ?? "0.0.0.0";
   const port = Number(process.env.PORT ?? "3000");
   const configPath = resolve(process.env.NEXUS_CONFIG ?? "nexus.config.json");
-  const server = await startNexusServer({ host, port, configPath });
+  const supervisor = new RuntimeSupervisor({
+    journal: new FileOwnershipJournal(),
+    logger: console,
+  });
+  const server = await startNexusServer({ host, port, configPath, supervisor });
+  let shuttingDown = false;
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.once(signal, () => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      console.log(`Received ${signal}; stopping the active game before exit.`);
+      shutdownNexus(server, supervisor).then(
+        () => process.exit(0),
+        (error) => {
+          console.error(error);
+          process.exit(1);
+        },
+      );
+    });
+  }
   const address = server.address();
   const actualPort = typeof address === "object" && address !== null ? address.port : port;
   console.log(`Tabletop Nexus listening on http://${host}:${actualPort}`);

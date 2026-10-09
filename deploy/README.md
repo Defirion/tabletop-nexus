@@ -74,11 +74,12 @@ cd ~/tabletop-nexus && git pull
 docker compose -f deploy/compose.yaml up -d --build
 ```
 
-Stop the active game in the portal first. Recreating the container ends every process inside it, games included, and Nexus starts with no active game.
+Stop the active game in the portal first. Recreating the container ends every process inside it, games included, and Nexus starts with no active game. `docker stop` sends `SIGTERM`, which Nexus handles by stopping the active game before exiting.
 
 ## Container settings
 
 - `init: true` runs a small init as PID 1 so stray processes are reaped.
 - `read_only: true` with a tmpfs at `/tmp`, and log rotation, per the homestack conventions.
+- Nexus keeps a small restart-recovery record under `/tmp` (the tmpfs; override with `NEXUS_STATE_DIR`). It never needs to survive the container: a recreated container has no processes to recover. Because the root filesystem is read-only, a missing writable `/tmp` would make game starts fail rather than run untracked.
 - Only the Nexus port is published. Game ports are private `127.0.0.1` ports inside the container.
 - Nexus and the active game share the container's memory.

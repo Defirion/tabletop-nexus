@@ -9,4 +9,4 @@ ui   = "/"
 auth = "lan"
 
 [data]
-kind = "none"                    # lifecycle state is in memory; games are git clones under /srv/homestack/nexus/games
+kind = "none"                    # lifecycle state is in memory (plus a throwaway record under /tmp); games are git clones under /srv/homestack/nexus/games
