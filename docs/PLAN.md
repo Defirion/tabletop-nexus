@@ -203,6 +203,7 @@ The deliberately selected stricter common game shape is now promoted into the no
 - [ ] Game metadata/artwork hooks using only distributable assets.
 - [ ] Recover cleanly after Nexus restarts.
 - [x] Mobile-friendly portal. (Browser viewport and focus checks; representative real-device acceptance remains N3 work.)
+- [ ] Port the approved portal visual direction, **A5 "Top-Down Table + QR"** (approved 8 October 2026), from the reference mock in [`docs/design/portal-a5/`](design/portal-a5/index.html) into `public/`. Keep `public/app.js` lifecycle behaviour and tests intact and reuse `public/qr.js` instead of the mock's CDN QR library. Self-host the fonts rather than loading Google Fonts, so the portal makes no third-party requests and works without internet. Mock-only fields (play time, genre, cover art) wait for the metadata/artwork hook above.
 
 ## R5 — Public-project polish
 
