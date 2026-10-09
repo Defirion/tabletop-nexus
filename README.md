@@ -21,7 +21,7 @@ Games remain independent applications and repositories. Tabletop Nexus discovers
 
 **R2 single-port routing and the schema-3 adapter contract are implemented.** The current contract, local library discovery/validation, browser-safe `/api/games` output, minimal portal, private-port allocation, shell-free launch boundary, fixed readiness polling, lifecycle state, graceful/forced stop, one-active-game sequencing, and registered-game HTTP/WebSocket/SSE proxying are implemented. Public game routing strips `BASE_PATH` while reserving every canonical ASCII case form of the private `__nexus` first path segment.
 
-The N0 schema-3 baseline is finalized locally; [`docs/PLAN.md`](docs/PLAN.md) records its branch and verification status. Publication/integration into upstream `main` is separate. Real-game adapter acceptance remains N1 work. The first N2 portal slice now provides fixture-verified start/stop/switch controls, live lifecycle state, friendly failure summaries, ready game/advertised-board links, and in-browser QR codes for those links. Restart reconciliation and optional profile/diagnostic/metadata work remain open. The Windows verification gate skips six Linux-only lifecycle checks; Linux acceptance remains part of N1/N3.
+The N0 schema-3 baseline and the first N2 portal slice are merged into `main`; [`docs/PLAN.md`](docs/PLAN.md) records their verification status. Real-game adapter acceptance remains N1 work. The first N2 portal slice now provides fixture-verified start/stop/switch controls, live lifecycle state, friendly failure summaries, ready game/advertised-board links, and in-browser QR codes for those links. Restart reconciliation and optional profile/diagnostic/metadata work remain open. The Windows verification gate skips six Linux-only lifecycle checks; the full suite, including them, passes in a Linux Node 22 container. Real-game Linux acceptance remains part of N1/N3.
 
 See [`docs/PLAN.md`](docs/PLAN.md) for roadmap status and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for current component boundaries.
 
@@ -68,6 +68,8 @@ npm start
 ```
 
 The default Nexus address is `http://localhost:3000`. `HOST`, `PORT`, and `NEXUS_CONFIG` can override the local server settings. A missing `nexus.config.json` is valid and produces an empty library.
+
+For the homelab Docker deployment, with games bind-mounted from the host and updated without rebuilding the image, see [`deploy/README.md`](deploy/README.md).
 
 ## Operating the LAN portal
 

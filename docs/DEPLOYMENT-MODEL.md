@@ -290,6 +290,19 @@ Bandwidth/storage caveats: <provider-specific>
 
 That allows a provider/free-tier offering to change without changing Nexus architecture.
 
+### Homelab Docker (LAN)
+
+```text
+Profile: Homelab Docker (LAN)
+Status: fixture-tested on Docker Desktop, 9 October 2026; not yet deployed or measured on the target VM
+Host: Debian Docker VM on Proxmox, homestack conventions, host port 8400
+Notes: deploy/README.md
+```
+
+Nexus runs as one container with `init: true` and a read-only root filesystem. Games are git clones on the host, bind-mounted read-only at `/games`, and launched by the existing same-identity local launcher inside the Nexus container. Game dependencies are installed by `deploy/update-game.sh` inside the Nexus image so they match its runtime. Game changes therefore never rebuild the Nexus image.
+
+This is a trusted-LAN profile only. Running games inside the Nexus container under the Nexus identity does not meet the remote-play isolation requirement above. A remote profile is expected to use a separate VM, run each game in its own container through a launcher that does not hand Nexus the Docker socket, and reach the game over a private container network rather than `127.0.0.1`. That launcher, and the change from a fixed loopback private host to a launcher-chosen one, are R6 work.
+
 ## Acceptance criteria for a deployment profile
 
 Before advertising a concrete VM profile as supported:
