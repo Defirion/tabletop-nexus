@@ -1,0 +1,12 @@
+id       = "tabletop-nexus"
+summary  = "LAN portal that starts and serves browser tabletop games"
+runs_on  = "server"
+reason   = ""
+
+[http]
+port = 8400                      # claimed in homelab/apps/README.md
+ui   = "/"
+auth = "lan"
+
+[data]
+kind = "none"                    # lifecycle state is in memory; games are git clones under /srv/homestack/nexus/games
