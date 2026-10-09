@@ -1,0 +1,7 @@
+.git
+.local
+.claude
+node_modules
+coverage
+nexus.config.json
+*.log

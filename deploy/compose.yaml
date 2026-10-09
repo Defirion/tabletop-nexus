@@ -1,0 +1,47 @@
+# Run from the repo root on the server:
+#   docker compose -f deploy/compose.yaml up -d --build
+# Homestack pattern: single service, restart unless-stopped, bind-mounted host
+# folder under /srv/homestack/<id>/, read-only root filesystem, log rotation.
+# See deploy/README.md.
+# Explicit project name: other repos also keep compose files in deploy/, and a
+# shared default project name makes their containers look like orphans here.
+name: tabletop-nexus
+services:
+  nexus:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: tabletop-nexus:local      # update-game.sh installs game deps with this same image
+    container_name: tabletop-nexus
+    restart: unless-stopped
+    # Small init as PID 1 so Nexus isn't PID 1 and stray processes are reaped.
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    ports:
+      - "${NEXUS_PORT:-8400}:3000"   # LAN only. Game ports stay private inside the container.
+    environment:
+      NEXUS_CONFIG: /config/nexus.config.json
+    volumes:
+      # Long syntax: short "host:container" mounts mis-parse the drive colon in
+      # Windows paths (Docker Desktop); this form works on both OSes.
+      - type: bind
+        source: ${NEXUS_HOME:-/srv/homestack/nexus}/nexus.config.json
+        target: /config/nexus.config.json
+        read_only: true
+      - type: bind
+        source: ${NEXUS_HOME:-/srv/homestack/nexus}/games
+        target: /games
+        read_only: true
+    healthcheck:
+      test: ["CMD", "node", "-e",
+             "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
