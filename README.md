@@ -73,7 +73,7 @@ For the homelab Docker deployment, with games bind-mounted from the host and upd
 
 ## Operating the LAN portal
 
-Choose **Start game**, then wait for **Running** and select **Open game**. A ready game advertising a dedicated display also offers **Open board display** at its canonical board route. Both links use the Nexus address you opened; open the portal using its LAN address when sharing links with another device.
+Choose **Start game**, then wait for **Running** and select **Open game**. A ready game advertising a dedicated display also offers **Open board display** at its canonical board route. Both links use the Nexus address you opened; open the portal using its LAN address when sharing links with another device. The score pad beside the running game shows a QR code for each link: players scan it, and pressing it copies the link to share another way.
 
 Use **Stop game** or **Switch to this game** to change runtimes. The portal asks you to confirm because the active game's current session ends for all players. Game-specific room, host and seat controls remain inside each game. Status refreshes automatically; **Refresh library** retries a failed load or picks up local configuration changes. If cleanup fails, retry Stop and check the Nexus host console before restarting anything.
 

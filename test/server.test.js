@@ -44,6 +44,18 @@ test("server health and empty-library API are runnable without local config", as
   assert.equal(qr.status, 200);
   assert.match(qr.headers.get("content-type"), /^text\/javascript/);
   assert.match(await qr.text(), /globalThis\.nexusQr/);
+
+  // Fonts are bundled, so the portal works offline and makes no third-party requests.
+  const styles = await (await fetch(`${origin}/styles.css`)).text();
+  for (const source of [html, styles]) assert.doesNotMatch(source, /(?:https?:)?\/\/(?!www\.w3\.org\/2000\/svg)[\w.-]+\.\w/);
+  const fonts = [...styles.matchAll(/url\("(\/fonts\/[\w-]+\.woff2)"\)/g)].map(([, path]) => path);
+  assert.equal(fonts.length, 6);
+  for (const path of fonts) {
+    const font = await fetch(`${origin}${path}`);
+    assert.equal(font.status, 200, path);
+    assert.equal(font.headers.get("content-type"), "font/woff2");
+    assert.equal(Buffer.from(await font.arrayBuffer()).subarray(0, 4).toString("latin1"), "wOF2");
+  }
 });
 
 test("server API never exposes configured paths, runtime commands, tokens, or unknown metadata", async (t) => {

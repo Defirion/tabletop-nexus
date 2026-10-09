@@ -7,7 +7,7 @@ const source = await readFile(new URL("../public/app.js", import.meta.url), "utf
 const qrSource = await readFile(new URL("../public/qr.js", import.meta.url), "utf8");
 
 // Small DOM boundary double; behavior is exercised by the actual portal script.
-async function portal(initial, { qr = false, origin = "http://nexus.test:3000" } = {}) {
+async function portal(initial, { qr = false, origin = "http://nexus.test:3000", clipboard } = {}) {
   const nodes = new Map();
   const document = new EventTarget();
   class Element extends EventTarget {
@@ -25,7 +25,7 @@ async function portal(initial, { qr = false, origin = "http://nexus.test:3000" }
     showModal() { this.open = true; }
     close() { this.open = false; }
   }
-  for (const id of ["games", "library-status", "runtime-status", "action-feedback", "confirm-action",
+  for (const id of ["games", "table", "library-status", "runtime-status", "action-feedback", "confirm-action",
     "refresh-library", "confirm-description", "cancel-action", "continue-action"]) {
     nodes.set(`#${id}`, new Element("div"));
   }
@@ -41,7 +41,8 @@ async function portal(initial, { qr = false, origin = "http://nexus.test:3000" }
   const calls = [];
   const context = createContext({
     document, window: { location: { origin } }, URL, TextEncoder,
-    AbortSignal, setInterval() {}, fetch: async (path, options) => {
+    AbortSignal, setInterval() {}, setTimeout() {}, clearTimeout() {},
+    ...(clipboard ? { navigator: { clipboard } } : {}), fetch: async (path, options) => {
       calls.push({ path, options });
       if (networkError) throw new Error("offline");
       if (options.method === "POST") {
@@ -153,44 +154,53 @@ const running = (extra = {}) => library([game("game-a", {
   status: "running", playUrl: "/games/game-a/", boardUrl: "/games/game-a/board/", ...extra,
 })], { gameId: "game-a", status: "running" });
 const walkAll = (node) => [node, ...node.children.flatMap(walkAll)];
-const images = (p) => walkAll(p.nodes.get("#games")).filter((node) => node.tagName === "img");
+const images = (p) => walkAll(p.nodes.get("#table")).filter((node) => node.tagName === "img");
+const tickets = (p) => p.controls().filter((node) => /-qr$/.test(node.dataset.focusKey));
 
-test("portal offers QR codes only for ready same-origin links and hides them when locked", async () => {
+test("portal prints QR tickets only for ready same-origin links and removes them when locked", async () => {
   const none = await portal(running());
-  assert.equal(none.controls().filter((node) => /QR/.test(node.textContent)).length, 0, "no QR without the generator");
+  assert.equal(tickets(none).length, 0, "no QR without the generator");
+  assert.equal(none.controls().filter((node) => node.tagName === "a").length, 2, "links still work without it");
 
   const p = await portal(library([game()]), { qr: true });
-  assert.equal(p.controls().filter((node) => /QR/.test(node.textContent)).length, 0, "nothing to share before ready");
+  assert.equal(tickets(p).length, 0, "nothing to share before ready");
 
   p.setState(running());
   await p.refresh();
-  const toggles = p.controls().filter((node) => /QR/.test(node.textContent));
-  assert.deepEqual(toggles.map((node) => node.textContent), ["Show game QR", "Show board display QR"]);
-  assert.equal(images(p).length, 0);
-
-  toggles[0].dispatchEvent(new Event("click"));
-  assert.equal(images(p).length, 1);
-  assert.match(images(p)[0].src, /^data:image\/svg\+xml,%3Csvg/);
-  assert.equal(images(p)[0].alt, "QR code for the game link");
-  assert.match(p.text("games"), /http:\/\/nexus\.test:3000\/games\/game-a\/(?!board)/);
-  assert.ok(p.controls().find((node) => node.textContent === "Hide game QR"));
-  assert.doesNotMatch(p.text("games"), /local-only address/);
-
-  p.controls().find((node) => node.textContent === "Show board display QR").dispatchEvent(new Event("click"));
+  assert.deepEqual(tickets(p).map((node) => node.dataset.focusKey), ["game-a:play-qr", "game-a:board-qr"]);
   assert.equal(images(p).length, 2);
-  p.controls().find((node) => node.textContent === "Hide game QR").dispatchEvent(new Event("click"));
-  assert.equal(images(p).length, 1);
+  assert.match(images(p)[0].src, /^data:image\/svg\+xml,%3Csvg/);
+  assert.match(decodeURIComponent(images(p)[0].src), /fill="#2b1a0e"/, "printed in the table's walnut ink");
+  assert.doesNotMatch(p.text("table"), /https?:\/\//, "the join URL itself is not shown");
+  assert.doesNotMatch(p.text("table"), /local-only address/);
 
   // Mutations and lost connections remove the links, and their QR codes with them.
   p.setOffline(true);
   await p.refresh();
   assert.equal(images(p).length, 0);
-  assert.equal(p.controls().filter((node) => /QR/.test(node.textContent)).length, 0);
+  assert.equal(tickets(p).length, 0);
+});
+
+test("portal copies the absolute link when a QR ticket is pressed and keeps focus on it", async () => {
+  const written = [];
+  const p = await portal(running(), { qr: true, clipboard: { writeText: async (text) => { written.push(text); } } });
+  const ticket = tickets(p).find((node) => node.dataset.focusKey === "game-a:play-qr");
+  ticket.focus();
+  ticket.dispatchEvent(new Event("click"));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(written, ["http://nexus.test:3000/games/game-a/"]);
+  assert.match(p.text("action-feedback"), /game link was copied/);
+  const stamped = tickets(p).find((node) => node.dataset.focusKey === "game-a:play-qr");
+  assert.match(stamped.className, /copied/);
+  assert.equal(p.document.activeElement, stamped);
+
+  const blocked = await portal(running(), { qr: true });
+  tickets(blocked)[0].dispatchEvent(new Event("click"));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(blocked.text("action-feedback"), /blocked copying/);
 });
 
 test("portal warns that a QR built from a loopback origin only works on the host", async () => {
   const p = await portal(running(), { qr: true, origin: "http://localhost:3000" });
-  p.controls().find((node) => node.textContent === "Show game QR").dispatchEvent(new Event("click"));
-  assert.match(p.text("games"), /local-only address/);
-  assert.match(p.text("games"), /http:\/\/localhost:3000\/games\/game-a\//);
+  assert.match(p.text("table"), /local-only address/);
 });

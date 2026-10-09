@@ -266,25 +266,35 @@
     return { version, mask: best.mask, size: matrix.size, modules: best.modules };
   }
 
-  function toSvg(text, { quietZone = 4 } = {}) {
+  // Colours are hex literals only, so the SVG stays inert whatever the caller passes.
+  function colour(value) {
+    if (!/^#[0-9a-f]{3,8}$/i.test(value)) throw new TypeError("QR colours must be hex values");
+    return value;
+  }
+
+  function toSvg(text, { quietZone = 4, dark = "#000", light = "#fff", finder = dark } = {}) {
     const { size, modules } = encode(text);
     const total = size + quietZone * 2;
-    let path = "";
+    // Finder patterns (the three corner squares) may take their own colour.
+    const isFinder = (x, y) => (x < 7 || x >= size - 7) && (y < 7 || (y >= size - 7 && x < 7));
+    const paths = { data: "", finder: "" };
     modules.forEach((row, y) => {
       for (let x = 0; x < size; x += 1) {
         if (!row[x]) continue;
+        const kind = isFinder(x, y) ? "finder" : "data";
         let end = x;
-        while (end + 1 < size && row[end + 1]) end += 1;
-        path += `M${x + quietZone} ${y + quietZone}h${end - x + 1}v1h-${end - x + 1}z`;
+        while (end + 1 < size && row[end + 1] && (isFinder(end + 1, y) ? "finder" : "data") === kind) end += 1;
+        paths[kind] += `M${x + quietZone} ${y + quietZone}h${end - x + 1}v1h-${end - x + 1}z`;
         x = end;
       }
     });
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${total} ${total}" shape-rendering="crispEdges">`
-      + `<rect width="${total}" height="${total}" fill="#fff"/><path d="${path}" fill="#000"/></svg>`;
+      + `<rect width="${total}" height="${total}" fill="${colour(light)}"/>`
+      + `<path d="${paths.data}" fill="${colour(dark)}"/><path d="${paths.finder}" fill="${colour(finder)}"/></svg>`;
   }
 
-  function toDataUrl(text) {
-    return `data:image/svg+xml,${encodeURIComponent(toSvg(text))}`;
+  function toDataUrl(text, options) {
+    return `data:image/svg+xml,${encodeURIComponent(toSvg(text, options))}`;
   }
 
   globalThis.nexusQr = Object.freeze({ encode, toSvg, toDataUrl, reedSolomonRemainder });

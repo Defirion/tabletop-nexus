@@ -14,6 +14,13 @@ const STATIC_FILES = new Map([
   ["/qr.js", { file: "qr.js", type: "text/javascript; charset=utf-8" }],
   ["/app.js", { file: "app.js", type: "text/javascript; charset=utf-8" }],
   ["/styles.css", { file: "styles.css", type: "text/css; charset=utf-8" }],
+  // Bundled portal fonts (SIL Open Font License; see public/fonts/LICENSE-*.txt).
+  ["/fonts/alfa-slab-one-latin-400-normal.woff2", { file: "fonts/alfa-slab-one-latin-400-normal.woff2", type: "font/woff2" }],
+  ["/fonts/caveat-latin-600-normal.woff2", { file: "fonts/caveat-latin-600-normal.woff2", type: "font/woff2" }],
+  ["/fonts/caveat-latin-700-normal.woff2", { file: "fonts/caveat-latin-700-normal.woff2", type: "font/woff2" }],
+  ["/fonts/libre-baskerville-latin-400-normal.woff2", { file: "fonts/libre-baskerville-latin-400-normal.woff2", type: "font/woff2" }],
+  ["/fonts/libre-baskerville-latin-400-italic.woff2", { file: "fonts/libre-baskerville-latin-400-italic.woff2", type: "font/woff2" }],
+  ["/fonts/libre-baskerville-latin-700-normal.woff2", { file: "fonts/libre-baskerville-latin-700-normal.woff2", type: "font/woff2" }],
 ]);
 
 function sendJson(response, status, body, method = "GET") {

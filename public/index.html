@@ -3,35 +3,42 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="dark light" />
+    <meta name="color-scheme" content="dark" />
     <title>Tabletop Nexus</title>
+    <link rel="preload" href="/fonts/alfa-slab-one-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/caveat-latin-700-normal.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <main class="shell">
-      <header>
-        <p class="eyebrow">Local game library</p>
+    <div class="table">
+      <header class="plate">
         <h1>Tabletop Nexus</h1>
-        <p class="lede">One LAN portal for independent browser tabletop games.</p>
-        <p class="host-note">Host controls · One game runs at a time. Stopping or switching ends its current session.</p>
+        <small>Game night, laid out</small>
       </header>
-      <section aria-labelledby="library-title">
-        <div class="section-heading">
-          <h2 id="library-title">Games</h2>
-          <span id="library-status" role="status">Loading…</span>
-        </div>
-        <p id="action-feedback" role="status" aria-live="polite"></p>
-        <div id="runtime-status" class="runtime-status"></div>
-        <div id="games" class="games"></div>
-        <button id="refresh-library" type="button" class="secondary">Refresh library</button>
-      </section>
-    </main>
+      <main class="felt">
+        <div id="runtime-status" class="notes"></div>
+        <p id="action-feedback" class="feedback" role="status" aria-live="polite"></p>
+        <section class="stage" aria-label="On the table">
+          <div id="table" class="play-row"></div>
+        </section>
+        <section class="library" aria-labelledby="library-title">
+          <div class="lib-head">
+            <h2 id="library-title">The library</h2>
+            <span id="library-status" class="count" role="status">Loading…</span>
+            <button id="refresh-library" type="button" class="token paper">Refresh library</button>
+          </div>
+          <p class="house-rule">House rule: one game runs at a time. Stopping or switching ends its current session for everyone.</p>
+          <ul id="games" class="scatter"></ul>
+        </section>
+      </main>
+    </div>
     <dialog id="confirm-action" aria-labelledby="confirm-title" aria-describedby="confirm-description">
+      <div class="seal" aria-hidden="true">!</div>
       <h2 id="confirm-title">End the current session?</h2>
       <p id="confirm-description"></p>
-      <div class="actions">
-        <button id="cancel-action" type="button" class="secondary" autofocus>Cancel</button>
-        <button id="continue-action" type="button">Continue</button>
+      <div class="dlg-acts">
+        <button id="cancel-action" type="button" class="token paper" autofocus>Cancel</button>
+        <button id="continue-action" type="button" class="token red">Continue</button>
       </div>
     </dialog>
     <script src="/qr.js"></script>

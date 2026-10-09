@@ -150,3 +150,27 @@ test("SVG and data URL contain only inert vector content", () => {
   const url = qr.toDataUrl("http://nexus.test:3000/games/a/");
   assert.ok(url.startsWith("data:image/svg+xml,%3Csvg"));
 });
+
+test("themed SVG keeps every module and colours only the finder squares separately", () => {
+  const text = "http://192.168.1.24:3000/games/salt-and-sail/";
+  const svg = qr.toSvg(text, { quietZone: 3, dark: "#2b1a0e", light: "#fbf5e8", finder: "#234a3f" });
+  const { size, modules } = qr.encode(text);
+  const fills = [...svg.matchAll(/<path d="([^"]*)" fill="(#[0-9a-f]+)"\/>/g)];
+  assert.deepEqual(fills.map(([, , fill]) => fill), ["#2b1a0e", "#234a3f"]);
+  assert.match(svg, /<rect width="\d+" height="\d+" fill="#fbf5e8"\/>/);
+  const grid = Array.from({ length: size }, () => new Array(size).fill(false));
+  const finder = (x, y) => (x < 7 && y < 7) || (x >= size - 7 && y < 7) || (x < 7 && y >= size - 7);
+  fills.forEach(([, path], index) => {
+    for (const [, x, y, w] of path.matchAll(/M(\d+) (\d+)h(\d+)v1h-\d+z/g)) {
+      for (let dx = 0; dx < Number(w); dx += 1) {
+        const col = Number(x) - 3 + dx;
+        const row = Number(y) - 3;
+        assert.equal(grid[row][col], false, "modules are drawn once");
+        assert.equal(finder(col, row), index === 1, "finder colour covers exactly the finder squares");
+        grid[row][col] = true;
+      }
+    }
+  });
+  assert.deepEqual(grid, Array.from(modules, (row) => Array.from(row)));
+  assert.throws(() => qr.toSvg(text, { dark: "red\"/><script>" }), /hex/);
+});
