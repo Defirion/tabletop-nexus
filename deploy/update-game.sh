@@ -114,8 +114,16 @@ else
   check_not_running
 fi
 
-# --- 4. Check out the target ------------------------------------------------
+# Preserve the successful marker on a no-op, but invalidate it before checkout
+# or npm ci can change any files. A failed install must always be retryable.
 short="$(git -C "$dir" rev-parse --short "$target")"
+if [[ "$target" == "$current" && $reinstall -eq 0 && "$installed" == "$target" ]]; then
+  note "$name is already at $short; nothing to do (use --reinstall to reinstall dependencies)"
+  exit 0
+fi
+rm -f "$state_file"
+
+# --- 4. Check out the target ------------------------------------------------
 if [[ "$target" != "$current" ]]; then
   if [[ -n "$(git -C "$dir" status --porcelain --untracked-files=no)" ]]; then
     note "discarding local edits in $dir (the server copy is deploy-only)"
@@ -123,9 +131,6 @@ if [[ "$target" != "$current" ]]; then
   note "$name: $(git -C "$dir" rev-parse --short "$current") -> $short"
   git -C "$dir" --no-pager log --oneline --no-decorate "$current..$target" 2>/dev/null | sed 's/^/    /' || true
   git -C "$dir" checkout --quiet --detach --force "$target"
-elif [[ $reinstall -eq 0 && "$installed" == "$target" ]]; then
-  note "$name is already at $short; nothing to do (use --reinstall to reinstall dependencies)"
-  exit 0
 fi
 
 # --- 5. Install dependencies inside the Nexus image -------------------------
@@ -153,7 +158,11 @@ else
   note "no package.json; nothing to install"
 fi
 mkdir -p "$(dirname "$state_file")"
-echo "$target" > "$state_file"
+state_temp="$(mktemp "$state_file.XXXXXX")"
+trap 'rm -f "$state_temp"' EXIT
+echo "$target" > "$state_temp"
+mv -f "$state_temp" "$state_file"
+trap - EXIT
 
 # --- 6. Final checks --------------------------------------------------------
 config="$NEXUS_HOME/config/nexus.config.json"
