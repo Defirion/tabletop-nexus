@@ -360,17 +360,23 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
   }
 
   async function handleUpgrade(request, socket, head, route) {
-    socket.pause();
     let backendRequest;
     let backendResponse;
     let backendSocket;
     let releaseTarget = () => undefined;
+    let cancelled = false;
     const cancelUpstream = () => {
+      cancelled = true;
       backendResponse?.destroy();
       backendSocket?.destroy();
       backendRequest?.destroy();
       releaseTarget();
     };
+    socket.on("error", () => {
+      cancelUpstream();
+      socket.destroy();
+    });
+    socket.pause();
     socket.once("close", cancelUpstream);
     if (route.kind !== "game") {
       sendSocketResponse(
@@ -389,6 +395,10 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
       sendSocketResponse(socket, 500, "Internal Server Error", JSON.stringify({ error: "INTERNAL_ERROR" }));
       return;
     }
+    if (cancelled || socket.destroyed) {
+      if (target.kind === "target") target.runtime.release();
+      return;
+    }
     if (target.kind === "not-found") {
       sendSocketResponse(socket, 404, "Not Found", JSON.stringify({ error: "NOT_FOUND" }));
       return;
@@ -397,11 +407,12 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
       sendSocketResponse(socket, 503, "Service Unavailable", JSON.stringify({ error: "GAME_UNAVAILABLE" }));
       return;
     }
-    if (socket.destroyed) {
+    let released = false;
+    releaseTarget = () => {
+      if (released) return;
+      released = true;
       target.runtime.release();
-      return;
-    }
-    releaseTarget = target.runtime.release;
+    };
 
     try {
       backendRequest = httpRequest({
@@ -424,6 +435,10 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
     backendRequest.once("upgrade", (upgradeResponse, upgradeSocket, backendHead) => {
       backendResponse = upgradeResponse;
       backendSocket = upgradeSocket;
+      backendSocket.on("error", () => {
+        cancelUpstream();
+        socket.destroy();
+      });
       if (socket.destroyed) {
         cancelUpstream();
         return;
@@ -437,8 +452,6 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
       }
       socket.pipe(backendSocket);
       backendSocket.pipe(socket);
-      socket.once("error", () => backendSocket.destroy());
-      backendSocket.once("error", () => socket.destroy());
       socket.resume();
       backendSocket.resume();
     });

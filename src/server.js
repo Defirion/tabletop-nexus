@@ -96,8 +96,9 @@ function isPortalAction(request) {
 
 export function createNexusServer(configPath, {
   supervisor = new RuntimeSupervisor(),
+  loadGameLibrary = loadLibrary,
 } = {}) {
-  const proxy = createGameProxy({ configPath, loadLibrary, supervisor });
+  const proxy = createGameProxy({ configPath, loadLibrary: loadGameLibrary, supervisor });
   let busy = false;
   const server = createServer(async (request, response) => {
     try {
@@ -203,6 +204,7 @@ export function createNexusServer(configPath, {
     }
   });
   server.on("upgrade", (request, socket, head) => {
+    socket.on("error", () => undefined);
     const route = parsePublicGameRoute(request.url);
     proxy.handleUpgrade(request, socket, head, route).catch((error) => {
       console.error(error);
