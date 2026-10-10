@@ -462,12 +462,14 @@ test("RuntimeSupervisor retains a startup-failure lease when cleanup signaling f
     assert.equal(recording.allocations[0].released, false);
     assert.equal(supervisor.getActiveRuntime().gameId, "startup-cleanup-failure");
     assert.equal(supervisor.getState("startup-cleanup-failure").status, "failed");
+    assert.equal(supervisor.getState("startup-cleanup-failure").failureReason, "startup");
     assert.match(supervisor.getState("startup-cleanup-failure").error, /cleanup failed: failed to deliver SIGTERM/);
 
     await waitUntil(() => recording.allocations[0].released);
     assert.equal(supervisor.getActiveRuntime(), null);
 
     await supervisor.start(fixtureGame("after-startup-cleanup-failure"));
+    assert.equal(supervisor.getState("startup-cleanup-failure").failureReason, "startup", "late exit preserves the original startup cause");
     assert.equal(recording.allocations.length, 2);
     assert.ok(
       recording.events.indexOf("release:1:true") < recording.events.indexOf("allocate:2"),

@@ -51,6 +51,8 @@ Migration impact is explicit: schema-2 registrations (including the current Pira
 
 **Dependencies:** N0; Pirate PI1 and Captain CF1–CF2. Coordinate game-owned integration checks PI2 and CF3 during this milestone.
 
+**Partial Captain Flip check, 10 October 2026:** the Windows-hosted Nexus served Captain Flip through both loopback and the host's LAN address. Separate browser sessions completed a five-player Board H game with chosen Maps and both promos, then a two-player Board A/Base Map game with the observer tab closed. Room discovery, capacity rejection, lobby leave/rejoin, host handover, setup validation, tile/Map actions, Undo, refresh recovery, observer scoring, and Play Again were exercised. Confirmed Stop, unexpected runtime exit, failure reporting, and three further stop/start cycles passed; public readiness aliases were blocked. `npm run verify` passed 146 tests with 22 Linux-only checks skipped; Captain Flip's `npm run verify:local` passed 712 tests and typechecks. These same-host browser checks do not establish physical-device, mobile-layout, clipboard, Linux real-game, Pirate Island, or combined-switch acceptance; N1 remains open.
+
 - Register games using local configuration, keeping paths and personal game assets out of public Nexus metadata/source.
 - Use Pirate Island first because its runtime seam already exists. Complete its schema migration, room discovery, and same-origin physics delivery in its repository.
 - Integrate Captain Flip after its single runtime, path-safe links, game-owned creation/hosting, and optional board route exist in its repository.
@@ -210,6 +212,8 @@ The deliberately selected stricter common game shape is now promoted into the no
 
 - [x] Start/stop controls and visible lifecycle state. (Fixture-backed N2 interface slice; final adapter acceptance remains pending.)
 - [ ] Friendly startup failures and logs.
+- [x] Use a host-configured player-facing `publicOrigin` for Open links, shared links and QR codes when the host opens Nexus through a loopback or internal address. Implemented 10 October 2026; without the setting, links follow the browser origin with the existing loopback warning. Format validation and regression coverage do not establish physical-device reachability; that remains N3 acceptance.
+- [x] Distinguish runtime crashes from failed startups in the portal and clear stale success feedback. Implemented 10 October 2026 with explicit allowlisted failure causes, separate cleanup/recovery feedback, and regressions for crashes, late Start responses and delayed clipboard completion.
 - [ ] Add the reusable Nexus player-presentation profile UX using the defined optional display-name handoff.
 - [x] When the active game advertises dedicated-display support, offer an **Open board display** action/QR that opens its canonical `BASE_PATH/board/` entrypoint on an extra tablet, TV, monitor, or browser.
 - [ ] Game metadata/artwork hooks using only distributable assets.

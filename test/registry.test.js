@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { CURRENT_GAME_SCHEMA, loadLibrary, parseManifest, toPublicGame } from "../src/registry.js";
+import { CURRENT_GAME_SCHEMA, loadLibrary, loadLibraryConfiguration, parseManifest, toPublicGame } from "../src/registry.js";
 
 const validManifest = Object.freeze({
   schema: 3,
@@ -144,4 +144,29 @@ test("loadLibrary distinguishes absent config from malformed or incomplete confi
   const config = join(root, "nexus.config.json");
   await writeFile(config, JSON.stringify({ games: [{ path: "./missing-game" }] }));
   await assert.rejects(() => loadLibrary(config), /manifest not found/);
+});
+
+test("configured player origin is optional, normalized and limited to a non-local HTTP(S) origin", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "nexus-public-origin-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const configPath = join(root, "nexus.config.json");
+  assert.deepEqual(await loadLibraryConfiguration(configPath), { games: [] });
+  for (const [publicOrigin, expected] of [
+    [undefined, undefined], ["http://192.168.10.210:3001/", "http://192.168.10.210:3001"],
+    ["https://NEXUS.test:443/", "https://nexus.test"], ["http://[2001:db8::1]:3000", "http://[2001:db8::1]:3000"],
+  ]) {
+    await writeFile(configPath, JSON.stringify({ games: [], publicOrigin }));
+    assert.equal((await loadLibraryConfiguration(configPath)).publicOrigin, expected);
+    assert.deepEqual(await loadLibrary(configPath), []);
+  }
+  for (const publicOrigin of [null, 42, "", "nexus.test:3000", "ftp://nexus.test", "javascript:alert(1)",
+    "http://user:password@nexus.test", "http://@nexus.test", "http://nexus.test/games/", "http://nexus.test/foo/..",
+    "http://nexus.test/?secret", "http://nexus.test/#", "http://nexus.test/?", "http://nexus.test\\path",
+    "http://localhost:3000", "http://LOCALHOST./", "http://game.localhost", "http://127.12.34.56:3000",
+    "http://2130706433", "http://0.0.0.0:3000", "http://[::]:3000", "http://[::1]:3000",
+    "http://[::ffff:127.0.0.2]:3000",
+  ]) {
+    await writeFile(configPath, JSON.stringify({ games: [], publicOrigin }));
+    await assert.rejects(() => loadLibraryConfiguration(configPath), /config.publicOrigin must be/, publicOrigin);
+  }
 });

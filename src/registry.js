@@ -69,12 +69,27 @@ function parseConfig(value) {
   }
 
   return {
+    ...(value.publicOrigin === undefined ? {} : { publicOrigin: parsePublicOrigin(value.publicOrigin) }),
     games: value.games.map((entry, index) => {
       assertRecord(entry, `config.games[${index}]`);
       assertNonEmptyString(entry.path, `config.games[${index}].path`);
       return { path: entry.path };
     }),
   };
+}
+
+function parsePublicOrigin(value) {
+  const invalid = () => new Error("config.publicOrigin must be an HTTP(S) origin reachable by players, without credentials, a path, query or fragment");
+  if (typeof value !== "string" || !/^https?:\/\/[^/?#\\\s@]+\/?$/i.test(value)) throw invalid();
+  let url;
+  try { url = new URL(value); } catch { throw invalid(); }
+  const host = url.hostname.replace(/\.$/, "");
+  if (url.username || url.password || url.pathname !== "/" || url.search || url.hash
+    || value.includes("?") || value.includes("#")
+    || host === "localhost" || host.endsWith(".localhost") || /^127\./.test(host)
+    || ["0.0.0.0", "[::]", "[::1]"].includes(host)
+    || /^\[::ffff:(?:7f[0-9a-f]{2}:[0-9a-f]{1,4}|0:0)\]$/.test(host)) throw invalid();
+  return url.origin;
 }
 
 async function readJson(path, label) {
@@ -95,13 +110,13 @@ async function readJson(path, label) {
   }
 }
 
-export async function loadLibrary(configPath) {
+export async function loadLibraryConfiguration(configPath) {
   let configValue;
   try {
     configValue = await readJson(configPath, "config");
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-      return [];
+      return { games: [] };
     }
     throw error;
   }
@@ -123,7 +138,11 @@ export async function loadLibrary(configPath) {
     installed.push({ root, manifest });
   }
 
-  return installed;
+  return { games: installed, ...(config.publicOrigin === undefined ? {} : { publicOrigin: config.publicOrigin }) };
+}
+
+export async function loadLibrary(configPath) {
+  return (await loadLibraryConfiguration(configPath)).games;
 }
 
 export function toPublicGame(game) {

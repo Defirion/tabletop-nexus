@@ -73,9 +73,22 @@ For the homelab Docker deployment, with games bind-mounted from the host and upd
 
 ## Operating the LAN portal
 
-Choose **Start game**, then wait for **Running** and select **Open game**. A ready game advertising a dedicated display also offers **Open board display** at its canonical board route. Both links use the Nexus address you opened; open the portal using its LAN address when sharing links with another device. The score pad beside the running game shows a QR code for each link: players scan it, and pressing it copies the link to share another way.
+Choose **Start game**, then wait for **Running** and select **Open game**. A ready game advertising a dedicated display also offers **Open board display** at its canonical board route. The score pad beside the running game shows a QR code for each link: players scan it, and pressing it copies the link to share another way.
+
+Set the optional `publicOrigin` in local `nexus.config.json` to the Nexus address players can reach. Open links, QR codes, and copied links will use it even when you open the portal through localhost or an internal address:
+
+```json
+{
+  "publicOrigin": "http://192.168.1.20:3000",
+  "games": [{ "path": "../my-browser-game" }]
+}
+```
+
+Replace the example with the host's LAN address and **Nexus port**, not the game's private port. The value must be an HTTP(S) origin without credentials, a path, query, or fragment; loopback and wildcard addresses are rejected. Nexus validates its format but cannot establish that another device can reach it. Keep it current if the host address changes. Without this setting, links use the address you opened; the portal warns when QR codes use a loopback address. The setting does not change listeners, proxy routing, or host-control requests, and does not enable remote-play support.
 
 Use **Stop game** or **Switch to this game** to change runtimes. The portal asks you to confirm because the active game's current session ends for all players. Game-specific room, host and seat controls remain inside each game. Status refreshes automatically; **Refresh library** retries a failed load or picks up local configuration changes. If cleanup fails, retry Stop and check the Nexus host console before restarting anything.
+
+A failed startup shows **Didn’t start**. A running game that exits shows **Game stopped unexpectedly** and can be started again for a new session. Unresolved cleanup shows **Cleanup needs attention** and keeps starts paused. Success feedback clears when refreshed state no longer supports it.
 
 The portal is for a trusted LAN: anyone with access can operate its host controls. Remote play and separate private administration remain future work.
 

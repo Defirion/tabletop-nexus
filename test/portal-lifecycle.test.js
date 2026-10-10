@@ -161,6 +161,7 @@ test("portal contains bounded startup failure and permits recovery", async (t) =
   const state = await library();
   assert.equal(state.runtime, null);
   assert.equal(state.games[0].status, "failed");
+  assert.equal(state.games[0].failureReason, "startup");
   assert.equal(state.games[0].playUrl, undefined);
   assert.match(state.games[0].message, /Try starting it again/);
   assert.equal(JSON.stringify(state).includes("private-portal-launch-token"), false);
@@ -225,6 +226,9 @@ test("portal observes unexpected fixture exit and removes ready links", async (t
   assert.equal(state.runtime, null);
   assert.equal(state.games[0].playUrl, undefined);
   assert.equal(state.games[0].boardUrl, undefined);
+  assert.equal(state.games[0].failureReason, "runtime-exit");
+  assert.match(state.games[0].message, /stopped unexpectedly/);
+  assert.equal(JSON.stringify(state).includes("exited unexpectedly (code"), false);
 });
 
 test("cleanup errors retain a safe public diagnosis without exposing private supervisor state", async (t) => {
@@ -248,6 +252,27 @@ test("cleanup errors retain a safe public diagnosis without exposing private sup
   const state = await (await fetch(`${origin}/api/games`)).json();
   assert.deepEqual(state.runtime, { gameId: "game-a", status: "failed" });
   assert.match(state.games[0].message, /Cleanup could not be confirmed/);
+  assert.equal(state.games[0].failureReason, "cleanup");
   assert.equal(JSON.stringify(state).includes("secret-"), false);
   assert.equal(state.games[0].playUrl, undefined);
+});
+
+test("portal exposes only the host-configured player origin and keeps administration at its request origin", async (t) => {
+  const { configPath, origin, action, library, supervisor } = await setup(t);
+  const games = [{ path: "game-a" }, { path: "game-b" }];
+  await writeFile(configPath, JSON.stringify({ games, publicOrigin: "http://192.168.10.210:3001/", secret: "private-config-field" }));
+  const response = await fetch(`${origin}/api/games`, {
+    headers: { "x-forwarded-host": "attacker.test", "x-forwarded-proto": "https", host: "attacker.test" },
+  });
+  const state = await response.json();
+  assert.equal(state.publicOrigin, "http://192.168.10.210:3001");
+  assert.equal(JSON.stringify(state).includes("private-config-field"), false);
+  assert.equal((await action("game-a", "start", "", { origin: state.publicOrigin })).status, 403);
+  assert.equal((await action("game-a", "start")).status, 200);
+  assert.equal((await library()).games[0].playUrl, "/games/game-a/");
+  assert.equal((await fetch(`${origin}/games/game-a/`)).status, 200);
+  await writeFile(configPath, JSON.stringify({ games, publicOrigin: "http://localhost:3000" }));
+  assert.equal((await fetch(`${origin}/api/games`)).status, 500);
+  assert.equal((await action("game-a", "stop")).status, 200);
+  assert.equal(supervisor.getActiveRuntime(), null);
 });

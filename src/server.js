@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createGameProxy, parsePublicGameRoute } from "./game-proxy.js";
-import { loadLibrary, toPublicGame } from "./registry.js";
+import { loadLibrary, loadLibraryConfiguration, toPublicGame } from "./registry.js";
 import { FileOwnershipJournal } from "./runtime/ownership-journal.js";
 import { RuntimeSupervisor } from "./runtime/supervisor.js";
 
@@ -58,15 +58,20 @@ function publicGame(game, supervisor) {
   const ready = runtime !== null;
   runtime?.release();
   const basePath = `/games/${metadata.id}/`;
+  const failureReason = supervisor.getActiveRuntime()?.gameId === metadata.id ? "cleanup"
+    : ["startup", "runtime-exit"].includes(state.failureReason) ? state.failureReason : null;
   return {
     ...metadata,
     status: state.status,
     ...(state.recovered === true && (state.status === "failed" || state.status === "stopping") ? {
       message: recoveredMessage(state.status),
     } : state.status === "failed" ? {
-      message: supervisor.getActiveRuntime()?.gameId === metadata.id
+      ...(failureReason === null ? {} : { failureReason }),
+      message: failureReason === "cleanup"
         ? "Cleanup could not be confirmed. Retry Stop game. If it still fails, check the Nexus host console before restarting."
-        : "The game could not run. Try starting it again; if it still fails, check its setup on the Nexus host.",
+        : failureReason === "runtime-exit"
+          ? "The game stopped unexpectedly. Start it again to begin a new session; if it keeps stopping, check the Nexus host console."
+          : "The game could not run. Try starting it again; if it still fails, check its setup on the Nexus host.",
     } : {}),
     ...(state.status === "running" && !ready ? {
       message: "The game configuration changed. Restart the game to open it again.",
@@ -109,9 +114,10 @@ export function createNexusServer(configPath, {
       }
 
       if ((method === "GET" || method === "HEAD") && url.pathname === "/api/games") {
-        const games = await loadLibrary(configPath);
+        const { games, publicOrigin } = await loadLibraryConfiguration(configPath);
         sendJson(response, 200, {
           games: games.map((game) => publicGame(game, supervisor)),
+          ...(publicOrigin === undefined ? {} : { publicOrigin }),
           runtime: publicRuntime(supervisor),
           ...((supervisor.getRecovery?.() ?? null) === null ? {} : {
             recovery: {

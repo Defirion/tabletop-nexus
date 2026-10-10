@@ -151,7 +151,7 @@ test("portal hides ready links during mutations, handles failure and refreshes t
 });
 
 test("portal keeps a failed start on the table only until another game is started", async () => {
-  const failed = game("game-a", { status: "failed", message: "The game could not run." });
+  const failed = game("game-a", { status: "failed", failureReason: "startup", message: "The game could not run." });
   const p = await portal(library([game(), game("game-b")]));
   p.setActionResponse({ ok: false, payload: { error: "LIFECYCLE_FAILED" } });
   p.setActionHandler(() => p.setState(library([failed, game("game-b")])));
@@ -226,4 +226,85 @@ test("portal copies the absolute link when a QR ticket is pressed and keeps focu
 test("portal warns that a QR built from a loopback origin only works on the host", async () => {
   const p = await portal(running(), { qr: true, origin: "http://localhost:3000" });
   assert.match(p.text("table"), /local-only address/);
+});
+
+test("configured player origin feeds Open links, QR codes and copies even from localhost", async () => {
+  const written = [];
+  const state = { ...running(), publicOrigin: "http://192.168.10.210:3001" };
+  const p = await portal(state, { qr: true, origin: "http://localhost:3001",
+    clipboard: { writeText: async (text) => { written.push(text); } } });
+  const expected = ["http://192.168.10.210:3001/games/game-a/", "http://192.168.10.210:3001/games/game-a/board/"];
+  assert.deepEqual(p.controls().filter((node) => node.tagName === "a").map((node) => node.href), expected);
+  const qrContext = createContext({ TextEncoder });
+  runInContext(qrSource, qrContext);
+  assert.deepEqual(images(p).map((node) => node.src), expected.map((href) =>
+    runInContext(`nexusQr.toDataUrl(${JSON.stringify(href)}, {quietZone:3,dark:"#2b1a0e",finder:"#234a3f",light:"#fbf5e8"})`, qrContext)));
+  assert.doesNotMatch(p.text("table"), /local-only address/);
+  for (const ticket of tickets(p)) {
+    ticket.dispatchEvent(new Event("click"));
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.deepEqual(written, expected);
+  assert.ok(p.calls.every((call) => call.path === "/api/games"), "administration stays on the portal origin");
+  p.setState({ ...state, publicOrigin: "http://nexus.lan:3001" });
+  await p.refresh();
+  assert.equal(p.text("action-feedback"), "", "old copied-link feedback expires when the address changes");
+  assert.equal(p.controls().find((node) => node.tagName === "a").href, "http://nexus.lan:3001/games/game-a/");
+});
+
+test("portal distinguishes running crashes, startup failures and cleanup, and expires success feedback", async () => {
+  const p = await portal(library([game()]));
+  p.setActionHandler(() => p.setState(running()));
+  await p.act("game-a", "start");
+  assert.match(p.text("action-feedback"), /Game ready/);
+  await p.refresh();
+  assert.match(p.text("action-feedback"), /Game ready/, "unchanged polling keeps useful feedback");
+  const crashed = library([game("game-a", { status: "failed", failureReason: "runtime-exit", message: "The game stopped unexpectedly." })]);
+  p.setState(crashed);
+  await p.refresh();
+  assert.match(p.text("table"), /Game stopped unexpectedly/);
+  assert.doesNotMatch(p.text("table"), /Didn’t start/);
+  assert.equal(p.text("action-feedback"), "");
+  assert.equal(p.controls().filter((node) => node.tagName === "a").length, 0);
+
+  let finish;
+  p.setActionHandler(() => new Promise((resolve) => { finish = resolve; }));
+  const retry = p.act("game-a", "start");
+  assert.doesNotMatch(p.text("table"), /game stopped unexpectedly/i, "retrying hides the prior failure note");
+  p.setState(running());
+  finish();
+  await retry;
+
+  // A tab opened during play must also retain that game's later crash on the table.
+  const other = await portal(running());
+  other.setState(crashed);
+  await other.refresh();
+  assert.match(other.text("table"), /Game stopped unexpectedly/);
+  other.setState(library([game("game-a", { status: "failed", failureReason: "cleanup" })], { gameId: "game-a", status: "failed" }));
+  await other.refresh();
+  assert.match(other.text("table"), /Cleanup needs attention/);
+  other.setState(library([game("game-a", { status: "failed" })]));
+  await other.refresh();
+  assert.match(other.text("table"), /Game failed/);
+});
+
+test("portal does not retain a late successful start response after the game has already crashed", async () => {
+  const p = await portal(library([game()]));
+  p.setActionHandler(() => p.setState(library([game("game-a", { status: "failed", failureReason: "runtime-exit" })])));
+  await p.act("game-a", "start");
+  assert.equal(p.text("action-feedback"), "");
+  assert.match(p.text("table"), /Game stopped unexpectedly/);
+});
+
+test("a clipboard completion cannot restore stale feedback after a crash", async () => {
+  let finish;
+  const p = await portal(running(), { qr: true, clipboard: {
+    writeText: () => new Promise((resolve) => { finish = resolve; }),
+  } });
+  tickets(p)[0].dispatchEvent(new Event("click"));
+  p.setState(library([game("game-a", { status: "failed", failureReason: "runtime-exit" })]));
+  await p.refresh();
+  finish();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(p.text("action-feedback"), "");
 });

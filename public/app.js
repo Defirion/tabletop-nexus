@@ -30,8 +30,10 @@ let library = { games: [], runtime: null, busy: false };
 let pending = null;
 let unavailable = false;
 let lastRender = "";
-// Game this tab last tried to start; only its failure keeps it on the table, not an older one.
+// Game this tab last started or saw running; keep its failure on the table.
 let lastStarted = null;
+let feedbackContext = null;
+let feedbackSequence = 0;
 let refreshSequence = 0;
 let refreshInFlight = null;
 // QR ticket (`<gameId>:play|board`) whose link was just copied; it shows a stamp briefly.
@@ -65,9 +67,30 @@ function actionButton(text, gameId, operation, disabled) {
 
 function gameLink(text, path, key, style) {
   const link = textElement("a", `token ${style}`, text);
-  link.href = new URL(path, window.location.origin).href;
+  link.href = playerUrl(path);
   link.dataset.focusKey = key;
   return link;
+}
+
+function playerUrl(path) {
+  return new URL(path, library.publicOrigin ?? window.location.origin).href;
+}
+
+function clearStaleFeedback() {
+  if (feedbackContext === null || pending !== null) return;
+  const { gameId, status, href } = feedbackContext;
+  const game = library.games.find((entry) => entry.id === gameId);
+  const valid = !unavailable && (status === "running"
+    ? library.runtime?.gameId === gameId && game?.status === "running" && game.playUrl
+      && (!href || [game.playUrl, game.boardUrl].filter(Boolean).some((path) => playerUrl(path) === href))
+    : library.runtime?.gameId !== gameId && (!game || game.status === "stopped"));
+  if (!valid) {
+    feedbackRoot.textContent = "";
+    feedbackContext = null;
+    feedbackSequence += 1;
+    copied = null;
+    clearTimeout(copiedTimer);
+  }
 }
 
 // Box colours step round the colour wheel by the golden angle in library order, so neighbours never match.
@@ -152,12 +175,18 @@ async function copyText(text) {
 }
 
 async function copyLink(key, href, label) {
-  if (!await copyText(href)) {
+  const sequence = ++feedbackSequence;
+  feedbackContext = { gameId: key.split(":")[0], status: "running", href };
+  const success = await copyText(href);
+  if (sequence !== feedbackSequence) return;
+  if (!success) {
     feedbackRoot.textContent = "This browser blocked copying. Scan the code instead, or open the game and share its address.";
+    clearStaleFeedback();
     return;
   }
   feedbackRoot.textContent = `The ${label} link was copied. Paste it to anyone on this network.`;
   copied = key;
+  clearStaleFeedback();
   clearTimeout(copiedTimer);
   copiedTimer = setTimeout(() => { copied = null; render(); }, 1_600);
   render();
@@ -222,7 +251,8 @@ function openBox(game, phase) {
     torn.className = "torn-wrap";
     const note = document.createElement("div");
     note.className = "torn";
-    note.append(textElement("p", "torn-title", "Didn’t start"),
+    const title = { startup: "Didn’t start", "runtime-exit": "Game stopped unexpectedly", cleanup: "Cleanup needs attention" };
+    note.append(textElement("p", "torn-title", title[game.failureReason] ?? "Game failed"),
       textElement("p", "torn-text", game.message ?? "Check the Nexus host console for details."));
     torn.append(note);
     box.append(torn, piece("span", "xtok"));
@@ -276,7 +306,7 @@ function renderTable(game, locked) {
   lamp.setAttribute("role", "status");
   lamp.append(piece("i", ""), textElement("span", "", labels[phase] ?? phase));
   pad.append(textElement("p", "pad-kicker", "Score pad"), title, lamp, textElement("p", "meta", gameMeta(game)));
-  if (game.message && phase !== "failed") pad.append(textElement("p", "pad-note bad", game.message));
+  if (game.message && phase === game.status && phase !== "failed") pad.append(textElement("p", "pad-note bad", game.message));
 
   const actions = document.createElement("div");
   actions.className = "pad-acts";
@@ -288,7 +318,7 @@ function renderTable(game, locked) {
       actions.append(link);
       if (globalThis.nexusQr) pad.append(qrTicket(label, link.href, `${game.id}:${kind}`));
     }
-    if (globalThis.nexusQr && isLoopback(new URL(game.playUrl, window.location.origin).href)) {
+    if (globalThis.nexusQr && isLoopback(playerUrl(game.playUrl))) {
       pad.append(textElement("p", "pad-note bad",
         "This portal was opened through a local-only address, so other devices cannot use these codes. Open the portal at the host's LAN address instead."));
     }
@@ -331,6 +361,7 @@ function banner(text, bad) {
 }
 
 function render() {
+  clearStaleFeedback();
   const signature = JSON.stringify({ library, pending, unavailable, copied, lastStarted });
   // Leave focused controls in place on unchanged polling responses.
   if (signature === lastRender) return;
@@ -392,6 +423,7 @@ async function loadLibrary() {
     const result = await response.json();
     if (sequence !== refreshSequence) return;
     library = result;
+    if (pending === null && library.runtime?.status === "running") lastStarted = library.runtime.gameId;
     unavailable = false;
   } catch {
     if (sequence !== refreshSequence) return;
@@ -433,6 +465,8 @@ async function runAction(gameId, operation) {
   const activeGameId = library.runtime?.gameId ?? "";
   if (activeGameId && !await confirmEndSession(gameId, operation)) return;
   pending = { gameId, operation };
+  feedbackSequence += 1;
+  feedbackContext = null;
   if (operation === "start") lastStarted = gameId;
   // Discard any response captured before this mutation began.
   refreshSequence += 1;
@@ -445,6 +479,7 @@ async function runAction(gameId, operation) {
       signal: AbortSignal.timeout(45_000),
     });
     const result = await response.json();
+    if (response.ok) feedbackContext = { gameId, status: operation === "start" ? "running" : "stopped" };
     feedbackRoot.textContent = response.ok
       ? (operation === "start" ? "Game ready. Choose Open game to play." : "Game stopped.")
       : (errors[result.error] ?? "The action could not be completed. Refresh its status and try again.");

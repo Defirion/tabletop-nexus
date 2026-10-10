@@ -375,6 +375,7 @@ export class RuntimeSupervisor {
             await record.execution.stop({ gracePeriodMs: this.#stopGracePeriodMs });
           } catch (stopError) {
             this.#setState(gameId, GAME_LIFECYCLE_STATUS.FAILED, {
+              failureReason: "startup",
               error: `${messageFor(error)}; cleanup failed: ${messageFor(stopError)}`,
             });
             throw error;
@@ -390,7 +391,7 @@ export class RuntimeSupervisor {
         }
         lease?.release();
       }
-      this.#setState(gameId, GAME_LIFECYCLE_STATUS.FAILED, { error: messageFor(error) });
+      this.#setState(gameId, GAME_LIFECYCLE_STATUS.FAILED, { failureReason: "startup", error: messageFor(error) });
       throw error;
     }
   }
@@ -409,6 +410,7 @@ export class RuntimeSupervisor {
       stopResult = await record.execution.stop({ gracePeriodMs: this.#stopGracePeriodMs });
     } catch (error) {
       this.#setState(record.gameId, GAME_LIFECYCLE_STATUS.FAILED, {
+        failureReason: "cleanup",
         error: `failed to stop runtime: ${messageFor(error)}`,
       });
       throw error;
@@ -657,6 +659,7 @@ export class RuntimeSupervisor {
     }
     if (priorState?.status === GAME_LIFECYCLE_STATUS.FAILED) {
       this.#setState(record.gameId, GAME_LIFECYCLE_STATUS.FAILED, {
+        failureReason: priorState.failureReason,
         error: priorState.error,
       });
       return;
@@ -666,6 +669,7 @@ export class RuntimeSupervisor {
       ? messageFor(exit.error)
       : `code ${exit.code ?? "null"}, signal ${exit.signal ?? "none"}`;
     this.#setState(record.gameId, GAME_LIFECYCLE_STATUS.FAILED, {
+      failureReason: "runtime-exit",
       error: `game runtime exited unexpectedly (${detail})`,
     });
   }
