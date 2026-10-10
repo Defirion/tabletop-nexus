@@ -506,11 +506,15 @@ test("RuntimeSupervisor uses forced shutdown fallback when SIGTERM does not stop
 
 test("RuntimeSupervisor enforces the absolute startup deadline against trickling readiness and unblocks queued lifecycle work", async () => {
   const recording = createRecordingAllocator();
+  // Both starts share this supervisor. Leave real process launch headroom for
+  // the queued healthy game, while a probe much longer than this budget still
+  // proves trickling data cannot extend the absolute startup deadline.
+  const startupTimeoutMs = 2_000;
   const supervisor = new RuntimeSupervisor({
     allocator: recording.allocator,
-    startupTimeoutMs: 150,
+    startupTimeoutMs,
     pollIntervalMs: 20,
-    requestTimeoutMs: 1_000,
+    requestTimeoutMs: 10_000,
     stopGracePeriodMs: 300,
   });
 
@@ -521,7 +525,8 @@ test("RuntimeSupervisor enforces the absolute startup deadline against trickling
 
     await assert.rejects(stalledStart, /game readiness timed out/);
     const elapsedMs = Date.now() - startedAt;
-    assert.ok(elapsedMs < 600, `startup deadline took ${elapsedMs}ms`);
+    assert.ok(elapsedMs >= startupTimeoutMs, `startup ended before its deadline at ${elapsedMs}ms`);
+    assert.ok(elapsedMs < startupTimeoutMs + 1_500, `startup deadline took ${elapsedMs}ms`);
 
     assert.deepEqual(await queuedStart, { gameId: "after-trickle", status: "running" });
     assert.equal(recording.allocations.length, 2);
