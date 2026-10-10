@@ -305,6 +305,11 @@ if (outputBytes > 0) {
   await writeOutput(process.stderr, outputBytes);
 }
 
+if (options.has("--diagnostic-output")) {
+  process.stdout.write(`fixture diagnostic stdout ${launchToken}\n`);
+  process.stderr.write(`fixture diagnostic stderr ${process.env.NEXUS_LIFECYCLE_TOKEN ?? "no-controller"}\n`);
+}
+
 if (bindDelayMs > 0) {
   await new Promise((resolve) => setTimeout(resolve, bindDelayMs));
 }

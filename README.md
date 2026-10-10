@@ -21,7 +21,7 @@ Games remain independent applications and repositories. Tabletop Nexus discovers
 
 **R2 single-port routing and the schema-3 adapter contract are implemented.** The current contract, local library discovery/validation, browser-safe `/api/games` output, minimal portal, private-port allocation, shell-free launch boundary, fixed readiness polling, lifecycle state, graceful/forced stop, one-active-game sequencing, and registered-game HTTP/WebSocket/SSE proxying are implemented. Public game routing strips `BASE_PATH` while reserving every canonical ASCII case form of the private `__nexus` first path segment.
 
-The N0 schema-3 baseline and the first N2 portal slice are merged into `main`; [`docs/PLAN.md`](docs/PLAN.md) records their verification status. Real-game adapter acceptance remains N1 work. The first N2 portal slice now provides fixture-verified start/stop/switch controls, live lifecycle state, friendly failure summaries, ready game/advertised-board links, and in-browser QR codes for those links. Restart recovery (a restarted Nexus verifies and reports what a crashed one left behind, on Linux) is implemented; optional profile/diagnostic/metadata work remains open. The Windows verification gate skips the Linux-only lifecycle and restart checks; the full suite, including them, passes in a Linux Node 22 container. Real-game Linux acceptance remains part of N1/N3.
+The N0 schema-3 baseline and the first N2 portal slice are merged into `main`; [`docs/PLAN.md`](docs/PLAN.md) records their verification status. Real-game adapter acceptance remains N1 work. The first N2 portal slice now provides fixture-verified start/stop/switch controls, live lifecycle state, friendly failure summaries, ready game/advertised-board links, and in-browser QR codes for those links. Restart recovery (a restarted Nexus verifies and reports what a crashed one left behind, on Linux) and host-local runtime diagnostics are implemented; optional profile/metadata work remains open. The Windows verification gate skips the Linux-only lifecycle and restart checks; the full suite, including them, passes in a Linux Node 22 container. Real-game Linux acceptance remains part of N1/N3.
 
 See [`docs/PLAN.md`](docs/PLAN.md) for roadmap status and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for current component boundaries.
 
@@ -91,6 +91,14 @@ Use **Stop game** or **Switch to this game** to change runtimes. The portal asks
 A failed startup shows **Didn’t start**. A running game that exits shows **Game stopped unexpectedly** and can be started again for a new session. Unresolved cleanup shows **Cleanup needs attention** and keeps starts paused. Success feedback clears when refreshed state no longer supports it.
 
 The portal is for a trusted LAN: anyone with access can operate its host controls. Remote play and separate private administration remain future work.
+
+### Troubleshooting a game
+
+When starting Nexus with `npm start`, the console prints **Host runtime diagnostics:** followed by a file path. Open that `runtime-diagnostics.json` on the host to inspect recent game output, failure details, and exit code/signal. It is created after the first launch and refreshed while games run, including after a failed startup, crash, stop or switch. It keeps the latest four launches from that Nexus run, with the last 32 KiB each of stdout and stderr; `droppedBytes` shows when earlier output was discarded.
+
+The file lives in `NEXUS_STATE_DIR`, defaulting to a per-user folder under the system temporary directory. A restart leaves the previous file available until the first new launch replaces its history; temporary files may disappear at reboot or container recreation. Set `NEXUS_STATE_DIR` to a private writable directory if you need that last snapshot to survive. On Unix the directory must belong to the Nexus user and exclude other users; on Windows use a folder private to your host account.
+
+Diagnostics stay on the host and are never served by the portal. Nexus removes its readiness/lifecycle tokens, but a game may print other private information; inspect the contents before sharing excerpts. If the console reports that the diagnostic file is unavailable, check directory permissions and free disk space, then restart Nexus when convenient. Output continues to drain and does not block game lifecycle operations.
 
 ### Restarting Nexus
 

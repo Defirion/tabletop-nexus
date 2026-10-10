@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createGameProxy, parsePublicGameRoute } from "./game-proxy.js";
 import { loadLibrary, loadLibraryConfiguration, toPublicGame } from "./registry.js";
 import { FileOwnershipJournal } from "./runtime/ownership-journal.js";
+import { FileDiagnosticWriter, RuntimeDiagnostics } from "./runtime/diagnostics.js";
 import { RuntimeSupervisor } from "./runtime/supervisor.js";
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
@@ -264,9 +265,12 @@ async function main() {
   const host = process.env.HOST ?? "0.0.0.0";
   const port = Number(process.env.PORT ?? "3000");
   const configPath = resolve(process.env.NEXUS_CONFIG ?? "nexus.config.json");
+  const diagnosticWriter = new FileDiagnosticWriter();
+  const diagnostics = new RuntimeDiagnostics({ writer: diagnosticWriter });
   const supervisor = new RuntimeSupervisor({
     journal: new FileOwnershipJournal(),
     logger: console,
+    diagnostics,
   });
   const server = await startNexusServer({ host, port, configPath, supervisor });
   let shuttingDown = false;
@@ -276,9 +280,10 @@ async function main() {
       shuttingDown = true;
       console.log(`Received ${signal}; stopping the active game before exit.`);
       shutdownNexus(server, supervisor).then(
-        () => process.exit(0),
-        (error) => {
+        async () => { await diagnostics.flush(); process.exit(0); },
+        async (error) => {
           console.error(error);
+          await diagnostics.flush();
           process.exit(1);
         },
       );
@@ -288,6 +293,7 @@ async function main() {
   const actualPort = typeof address === "object" && address !== null ? address.port : port;
   console.log(`Tabletop Nexus listening on http://${host}:${actualPort}`);
   console.log(`Configuration: ${configPath}`);
+  console.log(`Host runtime diagnostics: ${diagnosticWriter.path}`);
 }
 
 const invoked = process.argv[1] === undefined ? undefined : pathToFileURL(resolve(process.argv[1])).href;

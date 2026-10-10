@@ -102,6 +102,8 @@ export class RuntimeSupervisor {
   #stopGracePeriodMs;
   #journal;
   #logger;
+  #diagnostics;
+  #currentDiagnostic = null;
   #recoveryPollMs;
   #recoveryDeadlineMs;
   #blocked = null;
@@ -125,6 +127,7 @@ export class RuntimeSupervisor {
     stopGracePeriodMs = 5_000,
     journal = null,
     logger = null,
+    diagnostics = null,
     recoveryPollMs = 500,
     recoveryDeadlineMs = 15_000,
   } = {}) {
@@ -171,6 +174,7 @@ export class RuntimeSupervisor {
     this.#stopGracePeriodMs = stopGracePeriodMs;
     this.#journal = journal;
     this.#logger = logger;
+    this.#diagnostics = diagnostics;
     this.#recoveryPollMs = recoveryPollMs;
     this.#recoveryDeadlineMs = recoveryDeadlineMs;
   }
@@ -269,6 +273,9 @@ export class RuntimeSupervisor {
   #setState(gameId, status, extra = {}) {
     const recovered = this.#active?.gameId === gameId && this.#active.recovered === true;
     const next = { gameId, status, ...(recovered ? { recovered: true } : {}), ...extra };
+    if (!recovered && this.#currentDiagnostic?.gameId === gameId) {
+      this.#currentDiagnostic.update(next);
+    }
     this.#states.set(gameId, next);
     if (this.#active?.gameId === gameId) {
       this.#active.status = status;
@@ -292,6 +299,8 @@ export class RuntimeSupervisor {
 
     const gameId = game.manifest.id;
     const basePath = `/games/${gameId}`;
+    this.#currentDiagnostic = this.#diagnostics?.begin(gameId) ?? null;
+    const diagnostic = this.#currentDiagnostic;
     this.#setState(gameId, GAME_LIFECYCLE_STATUS.STARTING);
 
     let lease;
@@ -300,6 +309,7 @@ export class RuntimeSupervisor {
     try {
       lease = await this.#allocator.allocate();
       const launchToken = createLaunchToken(this.#launchTokenFactory);
+      diagnostic?.addSecrets([launchToken]);
       // Write-ahead: the launcher hands over the generation's identity before
       // the runtime is allowed to run, and a failed write aborts the launch.
       const recordOwnership = this.#journal !== null && this.#launcher.recoverable === true
@@ -319,6 +329,7 @@ export class RuntimeSupervisor {
         launcher: this.#launcher,
         requireDistinctSecurityBoundary: this.#requireDistinctSecurityBoundary,
         recordOwnership,
+        output: diagnostic ?? undefined,
         environment: {
           HOST: lease.host,
           PORT: String(lease.port),
@@ -347,6 +358,7 @@ export class RuntimeSupervisor {
       // If startup/stop cleanup fails but the process exits later, the retained
       // lease is released only at that confirmed termination point.
       exitPromise.then((exit) => {
+        diagnostic?.exit(exit);
         this.#enqueue(() => this.#handleDefinitiveExit(record, exit));
       });
 

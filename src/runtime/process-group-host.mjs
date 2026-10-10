@@ -57,7 +57,10 @@ function startRoot() {
     cwd: launchSpec.cwd,
     shell: false,
     env: process.env,
-    stdio: ["ignore", "ignore", "ignore"],
+    // Inherit the controller's output descriptors directly. Nexus consumes them
+    // when diagnostics are enabled; otherwise they point to the null device.
+    // No output is queued on the lifecycle IPC channel.
+    stdio: ["ignore", 1, 2],
   });
 
   root.on("error", (error) => {

@@ -11,6 +11,7 @@ import test from "node:test";
 import { FileOwnershipJournal, OWNERSHIP_JOURNAL_FILE } from "../../src/runtime/ownership-journal.js";
 import { createLocalGameProcessLauncher } from "../../src/runtime/process-launcher.js";
 import { RuntimeSupervisor } from "../../src/runtime/supervisor.js";
+import { DIAGNOSTICS_FILE } from "../../src/runtime/diagnostics.js";
 
 // Real processes, real /proc: these prove the restart story end to end on the
 // platform where Nexus can prove runtime ownership.
@@ -319,7 +320,7 @@ async function nexusConfig(root) {
     name: "Game A",
     players: { min: 1, max: 4 },
     capabilities: { tvLess: true },
-    runtime: { command: process.execPath, args: [fixtureServer] },
+    runtime: { command: process.execPath, args: [fixtureServer, "--diagnostic-output"] },
   }));
   const configPath = join(root, "nexus.config.json");
   await writeFile(configPath, JSON.stringify({ games: [{ path: "game-a" }] }));
@@ -342,6 +343,12 @@ test("clean restart: SIGTERM stops the active game before Nexus exits", linuxOnl
   assert.equal(isLive(controllerPid), false);
   await assertPortBindable("127.0.0.1", privatePort);
   await assert.rejects(readFile(join(stateDir, OWNERSHIP_JOURNAL_FILE)), { code: "ENOENT" });
+
+  const diagnostic = JSON.parse(await readFile(join(stateDir, DIAGNOSTICS_FILE), "utf8"));
+  assert.equal(diagnostic.launches[0].status, "stopped");
+  assert.ok(diagnostic.launches[0].endedAt);
+  assert.match(diagnostic.launches[0].stdout.text, /stdout \[redacted\]/);
+  assert.match(diagnostic.launches[0].stderr.text, /stderr \[redacted\]/);
 
   // The next Nexus starts with nothing on the table.
   const again = await startNexus(root, { configPath: join(root, "nexus.config.json"), port: await freePort() });

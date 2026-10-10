@@ -83,3 +83,13 @@ Stop the active game in the portal first. Recreating the container ends every pr
 - Nexus keeps a small restart-recovery record under `/tmp` (the tmpfs; override with `NEXUS_STATE_DIR`). It never needs to survive the container: a recreated container has no processes to recover. Because the root filesystem is read-only, a missing writable `/tmp` would make game starts fail rather than run untracked.
 - Only the Nexus port is published. Game ports are private `127.0.0.1` ports inside the container.
 - Nexus and the active game share the container's memory.
+
+## Inspect game diagnostics
+
+Nexus prints its host-local `runtime-diagnostics.json` path in `docker logs tabletop-nexus`. In the default profile, read it without exposing a new HTTP route:
+
+```bash
+docker exec tabletop-nexus cat /tmp/tabletop-nexus-1000/runtime-diagnostics.json
+```
+
+The file appears after the first game launch. It retains the latest four launches and bounded stdout/stderr tails, including failures and exits. It uses the `/tmp` tmpfs and is lost when the container stops or is recreated; copy needed excerpts before then. A custom `NEXUS_STATE_DIR` needs a private directory writable by the container's `node` user. Readiness/lifecycle tokens are removed, but games can print other private information, so keep diagnostics on the host and review excerpts before sharing.

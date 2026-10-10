@@ -2,6 +2,7 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { drainRuntimeOutput } from "./diagnostics.js";
 
 export const GAME_LAUNCH_SECURITY_BOUNDARY = Object.freeze({
   SAME_OS_IDENTITY: "same-os-identity",
@@ -628,7 +629,7 @@ function createLocalProcessLauncher({
         });
       }
     },
-    launch(spec, { recordOwnership } = {}) {
+    launch(spec, { recordOwnership, output } = {}) {
       if (ownProcessGroup) {
         const lifecycleToken = createLifecycleToken();
         if (typeof lifecycleToken !== "string" || lifecycleToken.length === 0) {
@@ -648,9 +649,10 @@ function createLocalProcessLauncher({
           cwd: spec.cwd,
           shell: false,
           env: environment,
-          stdio: ["ignore", "ignore", "ignore", "ipc"],
+          stdio: ["ignore", output ? "pipe" : "ignore", output ? "pipe" : "ignore", "ipc"],
           detached: true,
         });
+        if (output) drainRuntimeOutput(child, output, [spec.environment.NEXUS_LAUNCH_TOKEN, lifecycleToken]);
         const processGroup = Number.isInteger(child.pid)
           ? Object.freeze({
             id: child.pid,
@@ -699,10 +701,11 @@ function createLocalProcessLauncher({
         cwd: spec.cwd,
         shell: false,
         env: { ...parentEnv, ...spec.environment },
-        stdio: captureOutput
+        stdio: captureOutput || output
           ? ["ignore", "pipe", "pipe"]
           : ["ignore", "ignore", "ignore"],
       });
+      if (output) drainRuntimeOutput(child, output, [spec.environment.NEXUS_LAUNCH_TOKEN]);
       const exit = trackDirectRuntimeExit(child);
       runtimes.set(child, { exit, processGroup: null, control: { stopInProgress: false } });
       return child;
@@ -838,6 +841,7 @@ export function launchGameProcess(
     environment = {},
     requireDistinctSecurityBoundary = false,
     recordOwnership = undefined,
+    output = undefined,
   } = {},
 ) {
   if (typeof requireDistinctSecurityBoundary !== "boolean") {
@@ -853,9 +857,9 @@ export function launchGameProcess(
   }
 
   const spec = createLaunchSpec(game, environment);
-  return recordOwnership === undefined
+  return recordOwnership === undefined && output === undefined
     ? launcher.launch(spec)
-    : launcher.launch(spec, { recordOwnership });
+    : launcher.launch(spec, { recordOwnership, ...(output === undefined ? {} : { output }) });
 }
 
 /**
@@ -869,6 +873,7 @@ export function launchSupervisedGameProcess(
     environment = {},
     requireDistinctSecurityBoundary = false,
     recordOwnership = undefined,
+    output = undefined,
   } = {},
 ) {
   assertLauncher(launcher, { lifecycle: true });
@@ -877,6 +882,7 @@ export function launchSupervisedGameProcess(
     environment,
     requireDistinctSecurityBoundary,
     recordOwnership,
+    output,
   });
 
   return Object.freeze({
@@ -891,7 +897,7 @@ export function launchSupervisedGameProcess(
  *
  * Direct callers receive the ChildProcess, so stdout/stderr remain piped for the
  * caller to consume. The supervisor-capable exported local launcher always uses
- * discarded output instead, avoiding an unowned pipe/backpressure dependency.
+ * discarded output unless an owned diagnostic drain is supplied.
  */
 export function launchLocalGameProcess(
   game,
