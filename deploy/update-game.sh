@@ -156,7 +156,7 @@ mkdir -p "$(dirname "$state_file")"
 echo "$target" > "$state_file"
 
 # --- 6. Final checks --------------------------------------------------------
-config="$NEXUS_HOME/nexus.config.json"
+config="$NEXUS_HOME/config/nexus.config.json"
 if [[ ! -f "$config" ]] || ! grep -q "\"/games/$name\"" "$config"; then
   note "warning: $config does not list this game; add { \"path\": \"/games/$name\" } to its games array"
 fi

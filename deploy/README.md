@@ -8,13 +8,14 @@ This is the LAN profile. Games run as child processes inside the Nexus container
 
 ```text
 /srv/homestack/nexus/
-├── nexus.config.json        mounted at /config/nexus.config.json (read-only)
+├── config/                  mounted at /config (read-only)
+│   └── nexus.config.json
 └── games/                   mounted at /games (read-only)
     ├── pirate-shake/        git clone; node_modules installed by update-game.sh
     └── other-game/
 ```
 
-`nexus.config.json` lists games by their path **inside the container**:
+`config/nexus.config.json` lists games by their path **inside the container**:
 
 ```json
 { "games": [ { "path": "/games/pirate-shake" } ] }
@@ -25,16 +26,26 @@ This is the LAN profile. Games run as child processes inside the Nexus container
 On the Docker host, with `git` installed and a user in the `docker` group:
 
 ```bash
-sudo mkdir -p /srv/homestack/nexus/games
-sudo chown "$USER": /srv/homestack/nexus /srv/homestack/nexus/games
-echo '{ "games": [] }' > /srv/homestack/nexus/nexus.config.json
+sudo mkdir -p /srv/homestack/nexus/games /srv/homestack/nexus/config
+sudo chown "$USER": /srv/homestack/nexus /srv/homestack/nexus/games /srv/homestack/nexus/config
 
 git clone <nexus-repo-url> ~/tabletop-nexus
 cd ~/tabletop-nexus
+cp deploy/nexus.config.example.json /srv/homestack/nexus/config/nexus.config.json
 docker compose -f deploy/compose.yaml up -d --build
 ```
 
 The portal is on host port `8400` (override with `NEXUS_PORT`). `NEXUS_HOME` overrides `/srv/homestack/nexus`.
+
+The whole config directory is mounted so editors that save by atomic rename are visible on the next library refresh. `NEXUS_CONFIG` inside the container remains `/config/nexus.config.json`.
+
+For an existing installation, move the old file into the new directory and recreate the container once with the updated Compose file (stop the active game first):
+
+```bash
+mkdir -p "${NEXUS_HOME:-/srv/homestack/nexus}/config"
+mv "${NEXUS_HOME:-/srv/homestack/nexus}/nexus.config.json" "${NEXUS_HOME:-/srv/homestack/nexus}/config/nexus.config.json"
+docker compose -f deploy/compose.yaml up -d
+```
 
 ## Add a game
 
@@ -43,7 +54,7 @@ git clone <game-repo-url> /srv/homestack/nexus/games/pirate-shake
 bash ~/tabletop-nexus/deploy/update-game.sh pirate-shake
 ```
 
-Then add `{ "path": "/games/pirate-shake" }` to `nexus.config.json`. The game appears in the portal within a second.
+Then add `{ "path": "/games/pirate-shake" }` to `config/nexus.config.json`. The game appears in the portal within a second.
 
 Private repositories need read access from the host, for example a read-only deploy key per repository.
 

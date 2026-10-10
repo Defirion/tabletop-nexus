@@ -27,8 +27,8 @@ services:
       # Long syntax: short "host:container" mounts mis-parse the drive colon in
       # Windows paths (Docker Desktop); this form works on both OSes.
       - type: bind
-        source: ${NEXUS_HOME:-/srv/homestack/nexus}/nexus.config.json
-        target: /config/nexus.config.json
+        source: ${NEXUS_HOME:-/srv/homestack/nexus}/config
+        target: /config
         read_only: true
       - type: bind
         source: ${NEXUS_HOME:-/srv/homestack/nexus}/games

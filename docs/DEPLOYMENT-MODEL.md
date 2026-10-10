@@ -301,6 +301,8 @@ Notes: deploy/README.md
 
 Nexus runs as one container with `init: true` and a read-only root filesystem. Games are git clones on the host, bind-mounted read-only at `/games`, and launched by the existing same-identity local launcher inside the Nexus container. Game dependencies are installed by `deploy/update-game.sh` inside the Nexus image so they match its runtime. Game changes therefore never rebuild the Nexus image.
 
+The host config lives at `${NEXUS_HOME}/config/nexus.config.json`; Compose mounts the directory read-only at `/config`, retaining `NEXUS_CONFIG=/config/nexus.config.json`. Mounting the directory makes atomic-rename saves visible without recreating Nexus. Existing installations must move `${NEXUS_HOME}/nexus.config.json` into `config/` and run `docker compose -f deploy/compose.yaml up -d` once to recreate the container with the directory mount; see the migration commands in `deploy/README.md`.
+
 This is a trusted-LAN profile only. Running games inside the Nexus container under the Nexus identity does not meet the remote-play isolation requirement above. A remote profile is expected to use a separate VM, run each game in its own container through a launcher that does not hand Nexus the Docker socket, and reach the game over a private container network rather than `127.0.0.1`. That launcher, and the change from a fixed loopback private host to a launcher-chosen one, are R6 work.
 
 ## Acceptance criteria for a deployment profile
