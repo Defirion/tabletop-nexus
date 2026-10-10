@@ -115,7 +115,7 @@ else
 fi
 
 # Preserve the successful marker on a no-op, but invalidate it before checkout
-# or npm ci can change any files. A failed install must always be retryable.
+# or dependency installation can change any files. A failed install must always be retryable.
 short="$(git -C "$dir" rev-parse --short "$target")"
 if [[ "$target" == "$current" && $reinstall -eq 0 && "$installed" == "$target" ]]; then
   note "$name is already at $short; nothing to do (use --reinstall to reinstall dependencies)"
@@ -137,23 +137,12 @@ fi
 # Same Linux + Node as the runtime, so native modules match. Games with a
 # "build" script get full deps, build, then dev deps are pruned.
 if [[ -f "$dir/package.json" ]]; then
-  [[ -f "$dir/package-lock.json" ]] \
-    || die "$name has package.json but no package-lock.json; commit a lockfile so installs are reproducible"
   note "installing dependencies"
   docker run --rm \
     --user "$(id -u):$(id -g)" \
     -e HOME=/tmp -e npm_config_cache=/tmp/.npm -e npm_config_update_notifier=false \
     -v "$dir:/work" -w /work \
-    "$NEXUS_IMAGE" sh -c '
-      set -e
-      if node -e "process.exit(require(\"./package.json\").scripts?.build ? 0 : 1)"; then
-        npm ci --include=dev --no-audit --no-fund
-        npm run build
-        npm prune --omit=dev --no-audit --no-fund
-      else
-        npm ci --omit=dev --no-audit --no-fund
-      fi
-    '
+    "$NEXUS_IMAGE" node /app/deploy/install-game.mjs
 else
   note "no package.json; nothing to install"
 fi

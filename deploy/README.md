@@ -72,11 +72,36 @@ The script:
 2. validates the target `boardgame.json` with Nexus's own parser **before** checking it out, because one invalid manifest fails the whole library;
 3. refuses while that game is the active runtime, or while Nexus is mid-start/stop;
 4. checks out the commit (detached; the server copy is deploy-only, local edits are discarded);
-5. runs `npm ci` inside the Nexus image, so dependencies match the runtime's Linux and Node. A game with a `build` script gets full dependencies, `npm run build`, then dev dependencies are pruned. A `package-lock.json` is required.
+5. installs locked dependencies inside the Nexus image, so they match the runtime's Linux and Node. npm games require `package-lock.json`. pnpm games require `pnpm-lock.yaml` and an exact `packageManager: "pnpm@X.Y.Z"` in `package.json`; the installer downloads that version into its disposable `/tmp`. A game with a `build` script gets full dependencies, runs its build, then removes development dependencies (using a frozen production install for pnpm workspaces).
+
+Games must launch from those prepared artifacts. The running container mounts `/games` read-only and has no build tools installed globally. Pirate Island prepares its web client and compiled server with `pnpm build`; Captain Flip uses `npm run build`. Both are handled by the same updater.
 
 Roll back with `--ref <older-commit>`. Use `--reinstall` to reinstall dependencies without a new commit.
 
 The running-game check happens before the install. Don't start that game in the portal while an update is in progress.
+
+## Test on phones
+
+Set `publicOrigin` in `config/nexus.config.json` to the Docker host's LAN URL, for example `http://192.168.10.210:8400`, so the portal's QR codes and share links work on phones. Open that URL on devices connected to the same LAN, then start a game from the portal. The phones use the Nexus port; no game port needs publishing.
+
+With Docker Desktop, `NEXUS_HOME` can also be an absolute Windows directory containing `config/` and `games/`. Prepare dependencies inside Linux containers rather than copying Windows `node_modules`. The updater is a Bash host script; a local source snapshot can be prepared with its same installer, before launching Compose:
+
+```powershell
+$env:NEXUS_HOME = 'C:/path/to/nexus-home'
+docker compose -f deploy/compose.yaml build
+docker run --rm --user 1000:1000 -e HOME=/tmp -e npm_config_cache=/tmp/.npm -v "${env:NEXUS_HOME}/games/pirate-island:/work" -w /work tabletop-nexus:local node /app/deploy/install-game.mjs
+docker compose -f deploy/compose.yaml up -d
+```
+
+Run the installer once per game folder, and list each `/games/<folder>` in the config. Stop the game before preparing another version. Source snapshots need refreshing explicitly; Git clones managed by `update-game.sh` support the normal update/rollback flow above.
+
+If the portal works on the Windows host but other LAN devices cannot reach it, check Windows Firewall as well as the published port. On a trusted Private network, an elevated PowerShell can add a rule limited to the local subnet and the active Wi-Fi interface (replace the interface name with the one shown by `Get-NetConnectionProfile`):
+
+```powershell
+New-NetFirewallRule -Name 'TabletopNexus-LAN' -DisplayName 'Tabletop Nexus (private LAN)' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8400 -Profile Private -RemoteAddress LocalSubnet -InterfaceAlias 'Wi-Fi 2'
+```
+
+Ping uses a separate ICMP rule; a failed ping alone does not establish that the portal port is blocked. The 10 October 2026 Docker Desktop mobile run passed after scoped TCP 8400 and ICMP echo rules were enabled on the host's Private Wi-Fi interface.
 
 ## Update Nexus itself
 

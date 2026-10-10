@@ -299,7 +299,7 @@ Host: Debian Docker VM on Proxmox, homestack conventions, host port 8400
 Notes: deploy/README.md
 ```
 
-Nexus runs as one container with `init: true` and a read-only root filesystem. Games are git clones on the host, bind-mounted read-only at `/games`, and launched by the existing same-identity local launcher inside the Nexus container. Game dependencies are installed by `deploy/update-game.sh` inside the Nexus image so they match its runtime. Game changes therefore never rebuild the Nexus image.
+Nexus runs as one container with `init: true` and a read-only root filesystem. Games are git clones on the host, bind-mounted read-only at `/games`, and launched by the existing same-identity local launcher inside the Nexus container. Game dependencies and build artifacts are prepared by `deploy/update-game.sh` in a disposable container using the Nexus image. It accepts npm lockfiles or a pinned pnpm version with its lockfile, builds before removing development dependencies, and leaves runtime launches free of compilation or writes to the game tree. Game changes therefore never rebuild the Nexus image.
 
 The host config lives at `${NEXUS_HOME}/config/nexus.config.json`; Compose mounts the directory read-only at `/config`, retaining `NEXUS_CONFIG=/config/nexus.config.json`. Mounting the directory makes atomic-rename saves visible without recreating Nexus. Existing installations must move `${NEXUS_HOME}/nexus.config.json` into `config/` and run `docker compose -f deploy/compose.yaml up -d` once to recreate the container with the directory mount; see the migration commands in `deploy/README.md`.
 

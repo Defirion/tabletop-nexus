@@ -46,7 +46,7 @@ test("failed reinstall and failed update invalidate markers so same-commit retri
   await git(source, "remote", "add", "origin", remote);
 
   // Real local Git repositories; Docker only supplies manifest validation and
-  // the install command boundary. Execute the script's actual sh -c program
+  // the install command boundary. Execute the script's actual installer
   // with a deterministic npm double that wipes node_modules before failing.
   const dockerShim = `#!/usr/bin/env node
 import { spawnSync } from "node:child_process";
@@ -65,7 +65,7 @@ if (args.includes("--input-type=module")) {
 }
 const mount = args[args.indexOf("-v") + 1];
 const cwd = mount.slice(0, -":/work".length);
-const result = spawnSync("sh", ["-c", args.at(-1)], { cwd, stdio: "inherit" });
+const result = spawnSync(process.execPath, [${JSON.stringify(join(repo, "deploy/install-game.mjs"))}], { cwd, stdio: "inherit" });
 process.exit(result.status ?? 1);
 `;
   const npmShim = `#!/usr/bin/env node

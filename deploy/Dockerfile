@@ -8,6 +8,7 @@ WORKDIR /app
 COPY package.json ./
 COPY src/ src/
 COPY public/ public/
+COPY deploy/install-game.mjs deploy/install-game.mjs
 
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \

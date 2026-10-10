@@ -12,7 +12,7 @@ Schema 3 promotes the browser/runtime compatibility requirements deliberately de
 
 Manifest schemas 1 and 2 are no longer accepted by the current validator. This is an explicit contract migration rather than a silent redefinition of an already-supported contract.
 
-Existing schema-2 registrations fail validation until their game repository implements the schema-3 obligations and updates its manifest. Nexus does not upgrade manifests automatically. An invalid configured manifest currently fails the library load (including `/api/games`); remove that registration temporarily or migrate the game before using the revised library. This includes Pirate Island's existing schema-2 adapter. Readiness payloads remain schema 2 and must not be changed to 3 during this migration.
+Existing schema-2 registrations fail validation until their game repository implements the schema-3 obligations and updates its manifest. Nexus does not upgrade manifests automatically. An invalid configured manifest currently fails the library load (including `/api/games`); remove that registration temporarily or migrate the game before using the revised library. Readiness payloads remain schema 2 and must not be changed to 3 during this migration.
 
 Compatible games expose `boardgame.json` at the game repository root:
 
