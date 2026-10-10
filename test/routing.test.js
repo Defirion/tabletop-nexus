@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { request as httpRequest } from "node:http";
+import { globalAgent, request as httpRequest } from "node:http";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -198,6 +198,44 @@ test("single-port HTTP routing strips BASE_PATH and preserves ordinary game rout
   }
 
   assert.equal((await fetch(`${origin}/games/not-registered/`)).status, 404);
+});
+
+test("proxied requests leave no listeners behind on pooled backend sockets", async (t) => {
+  const { origin } = await startRoutingFixture(t);
+  const warnings = [];
+  const onWarning = (warning) => warnings.push(warning);
+  process.on("warning", onWarning);
+  t.after(() => process.off("warning", onWarning));
+
+  const pooledSockets = () => Object.values(globalAgent.freeSockets).flat();
+  const pooledErrorListeners = () => Math.max(
+    0,
+    ...pooledSockets().map((socket) => socket.listenerCount("error")),
+  );
+
+  await rawGet(origin, "/games/runtime-fixture/");
+  const poolDeadline = Date.now() + 1_000;
+  while (pooledSockets().length === 0 && Date.now() < poolDeadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.ok(pooledSockets().length > 0, "expected the backend connection to be pooled for reuse");
+  const afterFirst = pooledErrorListeners();
+
+  // More than Node's default MaxListeners (10), so a per-request leak is visible.
+  for (let index = 0; index < 25; index += 1) {
+    assert.equal((await rawGet(origin, `/games/runtime-fixture/api/echo?n=${index}`)).status, 200);
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(
+    pooledErrorListeners(),
+    afterFirst,
+    "pooled backend sockets accumulated listeners across proxied requests",
+  );
+  assert.deepEqual(
+    warnings.filter((warning) => warning.name === "MaxListenersExceededWarning"),
+    [],
+  );
 });
 
 test("reusable public compatibility check verifies the landing and advertised board routes", async (t) => {

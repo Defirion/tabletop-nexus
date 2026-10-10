@@ -207,6 +207,26 @@ function writeUpgradeHead(socket, response) {
   socket.write(`${lines.join("\r\n")}\r\n\r\n`);
 }
 
+/**
+ * Releases the runtime reference once the backend connection is established, or
+ * when connecting fails. Backend requests use the shared keep-alive agent, so the
+ * socket outlives the request: listeners must not outlive the connect/error race
+ * they cover, or every proxied request would leave one behind on a pooled socket.
+ */
+function releaseWhenConnected(backendSocket, release) {
+  if (!backendSocket.connecting) {
+    queueMicrotask(release);
+    return;
+  }
+  const settle = () => {
+    backendSocket.off("connect", settle);
+    backendSocket.off("error", settle);
+    release();
+  };
+  backendSocket.once("connect", settle);
+  backendSocket.once("error", settle);
+}
+
 export function createGameProxy({ configPath, loadLibrary, supervisor }) {
   if (typeof loadLibrary !== "function") {
     throw new TypeError("loadLibrary must be a function");
@@ -293,12 +313,7 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
     }
 
     backendRequest.once("socket", (backendSocket) => {
-      if (backendSocket.connecting) {
-        backendSocket.once("connect", releaseTarget);
-      } else {
-        queueMicrotask(releaseTarget);
-      }
-      backendSocket.once("error", releaseTarget);
+      releaseWhenConnected(backendSocket, releaseTarget);
     });
 
     backendRequest.once("response", (incomingResponse) => {
@@ -403,12 +418,7 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
     }
 
     backendRequest.once("socket", (backendConnection) => {
-      if (backendConnection.connecting) {
-        backendConnection.once("connect", releaseTarget);
-      } else {
-        queueMicrotask(releaseTarget);
-      }
-      backendConnection.once("error", releaseTarget);
+      releaseWhenConnected(backendConnection, releaseTarget);
     });
 
     backendRequest.once("upgrade", (upgradeResponse, upgradeSocket, backendHead) => {
