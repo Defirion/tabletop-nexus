@@ -40,9 +40,10 @@ async function setup(t, { args = [], startupTimeoutMs = 3_000 } = {}) {
     await rm(root, { recursive: true, force: true });
   });
   const library = async () => (await fetch(`${origin}/api/games`)).json();
-  const action = (id, operation, activeGameId = "", extraHeaders = {}) => fetch(`${origin}/api/games/${id}/${operation}`, {
+  const action = (id, operation, activeGameId = operation === "stop" ? id : "", extraHeaders = {}) => fetch(`${origin}/api/games/${id}/${operation}`, {
     method: "POST",
-    headers: { "x-nexus-action": "1", "x-nexus-active-game": activeGameId, origin, ...extraHeaders },
+    headers: { "x-nexus-action": "1", "x-nexus-active-game": activeGameId,
+      "x-nexus-runtime-revision": supervisor.getActiveRuntime()?.revision ?? "", origin, ...extraHeaders },
   });
   return { root, configPath, manifests, origin, supervisor, action, library };
 }
@@ -75,7 +76,7 @@ test("portal starts, opens, switches and stops real fixture games through one or
   assert.equal(started.status, 200);
   const first = supervisor.getActiveRuntime();
   state = await library();
-  assert.deepEqual(state.runtime, { gameId: "game-a", status: "running" });
+  assert.deepEqual(state.runtime, { gameId: "game-a", revision: first.revision, status: "running" });
   assert.equal(state.games[0].playUrl, "/games/game-a/");
   assert.equal(state.games[0].boardUrl, "/games/game-a/board/");
   assert.equal((await fetch(`${origin}${state.games[0].playUrl}`)).status, 200);
@@ -149,6 +150,52 @@ test("portal reports startup progress, rejects overlap and rejects stale host ac
   assert.equal(staleStop.status, 409);
   assert.equal(supervisor.getActiveRuntime().gameId, "game-a");
   assert.equal((await library()).busy, false);
+});
+
+for (const operation of ["start", "stop"]) {
+  test(`stale ${operation} confirmation cannot stop a replacement session of the same game`, async (t) => {
+    const { action, library, supervisor } = await setup(t);
+    assert.equal((await action("game-a", "start")).status, 200);
+    const original = (await library()).runtime.revision;
+    assert.match(original, /^[0-9a-f-]{36}$/);
+    assert.notEqual(original, "private-portal-launch-token");
+    assert.equal((await action("game-a", "stop")).status, 200);
+    assert.equal((await action("game-a", "start")).status, 200);
+    const replacement = supervisor.getActiveRuntime();
+    assert.notEqual(replacement.revision, original);
+    const stale = await action("game-a", operation, "game-a", { "x-nexus-runtime-revision": original });
+    assert.equal(stale.status, 409);
+    assert.deepEqual(await stale.json(), { error: "RUNTIME_CHANGED" });
+    assert.deepEqual(supervisor.getActiveRuntime(), replacement);
+    assert.equal((await library()).runtime.status, "running");
+  });
+}
+
+test("lifecycle revision preconditions explicitly handle no active runtime and missing headers", async (t) => {
+  const { action, origin, supervisor } = await setup(t);
+  const missing = await fetch(`${origin}/api/games/game-a/start`, {
+    method: "POST", headers: { "x-nexus-action": "1", "x-nexus-active-game": "" },
+  });
+  assert.equal(missing.status, 409);
+  assert.equal((await action("game-a", "stop", "", { "x-nexus-runtime-revision": "old-session" })).status, 409);
+  assert.equal(supervisor.getActiveRuntime(), null);
+  assert.equal((await action("game-a", "start", "", { "x-nexus-runtime-revision": "old-session" })).status, 409);
+  assert.equal((await action("game-a", "start")).status, 200);
+});
+
+test("supervisor checks session revisions after queued replacement of the same game", async (t) => {
+  const { root, manifests, supervisor } = await setup(t);
+  const game = { root: join(root, "game-a"), manifest: manifests.get("game-a") };
+  await supervisor.start(game);
+  const expectedRuntime = { gameId: "game-a", revision: supervisor.getActiveRuntime().revision };
+  const replacing = supervisor.start(game);
+  const staleStop = assert.rejects(supervisor.stop("game-a", expectedRuntime), { code: "RUNTIME_CHANGED" });
+  const staleStart = assert.rejects(supervisor.start(game, { expectedRuntime, reuseRunning: true }),
+    { code: "RUNTIME_CHANGED" });
+  await replacing;
+  await Promise.all([staleStop, staleStart]);
+  assert.notEqual(supervisor.getActiveRuntime().revision, expectedRuntime.revision);
+  assert.equal(supervisor.getActiveRuntime().status, "running");
 });
 
 test("portal contains bounded startup failure and permits recovery", async (t) => {

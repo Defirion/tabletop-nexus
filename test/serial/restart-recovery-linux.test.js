@@ -304,9 +304,10 @@ async function startNexus(scratchDir, { configPath, port }) {
   const origin = `http://127.0.0.1:${port}`;
   await waitUntil(() => output.includes("listening"), 10_000);
   const library = async () => (await fetch(`${origin}/api/games`)).json();
-  const start = (id, active = "") => fetch(`${origin}/api/games/${id}/start`, {
+  const start = async (id, active = "") => fetch(`${origin}/api/games/${id}/start`, {
     method: "POST",
-    headers: { "x-nexus-action": "1", "x-nexus-active-game": active, origin },
+    headers: { "x-nexus-action": "1", "x-nexus-active-game": active,
+      "x-nexus-runtime-revision": (await library()).runtime?.revision ?? "", origin },
   });
   return { child, exited, library, start, output: () => output };
 }

@@ -463,6 +463,7 @@ async function runAction(gameId, operation) {
   // Keep the runtime whose session the host agreed to end, even if another tab
   // changes it during confirmation. The server then rejects the stale action.
   const activeGameId = library.runtime?.gameId ?? "";
+  const runtimeRevision = library.runtime?.revision ?? "";
   if (activeGameId && !await confirmEndSession(gameId, operation)) return;
   pending = { gameId, operation };
   feedbackSequence += 1;
@@ -475,7 +476,8 @@ async function runAction(gameId, operation) {
   try {
     const response = await fetch(`/api/games/${gameId}/${operation}`, {
       method: "POST",
-      headers: { "x-nexus-action": "1", "x-nexus-active-game": activeGameId },
+      headers: { "x-nexus-action": "1", "x-nexus-active-game": activeGameId,
+        "x-nexus-runtime-revision": runtimeRevision },
       signal: AbortSignal.timeout(45_000),
     });
     const result = await response.json();

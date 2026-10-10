@@ -181,6 +181,7 @@ test("crash and restart: a leftover runtime still being removed by its controlle
   await supervisor.recover();
   assert.deepEqual(supervisor.getActiveRuntime(), {
     gameId: "old-game",
+    revision: supervisor.getActiveRuntime().revision,
     host: "127.0.0.1",
     port: LEFTOVER.privatePort,
     basePath: "/games/old-game",
@@ -369,7 +370,8 @@ async function portal(t, supervisor) {
     library: async () => (await fetch(`${origin}/api/games`)).json(),
     start: (id, active = "") => fetch(`${origin}/api/games/${id}/start`, {
       method: "POST",
-      headers: { "x-nexus-action": "1", "x-nexus-active-game": active, origin },
+      headers: { "x-nexus-action": "1", "x-nexus-active-game": active,
+        "x-nexus-runtime-revision": supervisor.getActiveRuntime()?.revision ?? "", origin },
     }),
   };
 }
@@ -382,7 +384,8 @@ test("portal reports a leftover runtime truthfully from its first response and k
   const { library, start } = await portal(t, supervisor);
 
   const state = await library();
-  assert.deepEqual(state.runtime, { gameId: "old-game", status: "failed", recovered: true });
+  assert.deepEqual(state.runtime, { gameId: "old-game", revision: supervisor.getActiveRuntime().revision,
+    status: "failed", recovered: true });
   assert.equal(state.games[0].status, "failed");
   assert.match(state.games[0].message, /Nexus restarted while this game was running/);
   assert.equal(state.games[0].playUrl, undefined);

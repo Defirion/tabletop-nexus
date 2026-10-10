@@ -41,6 +41,7 @@ function publicRuntime(supervisor) {
   const runtime = supervisor.getActiveRuntime();
   return runtime === null ? null : {
     gameId: runtime.gameId,
+    revision: runtime.revision,
     status: runtime.status,
     ...(runtime.recovered === true ? { recovered: true } : {}),
   };
@@ -149,6 +150,10 @@ export function createNexusServer(configPath, {
         busy = true;
         try {
           const [, gameId, operation] = action;
+          const expectedRuntime = {
+            gameId: request.headers["x-nexus-active-game"],
+            revision: request.headers["x-nexus-runtime-revision"],
+          };
           if (operation === "start") {
             const games = await loadLibrary(configPath);
             const game = games.find((entry) => entry.manifest.id === gameId);
@@ -156,20 +161,12 @@ export function createNexusServer(configPath, {
               sendJson(response, 404, { error: "GAME_NOT_FOUND" });
               return;
             }
-            const active = supervisor.getActiveRuntime();
-            if (request.headers["x-nexus-active-game"] !== (active?.gameId ?? "")) {
-              sendJson(response, 409, { error: "RUNTIME_CHANGED" });
-              return;
-            }
-            // Repeated Start on the same ready installation is idempotent.
-            const runtime = supervisor.acquireActiveRuntime(game);
-            if (runtime !== null) runtime.release();
-            else await supervisor.start(game);
+            await supervisor.start(game, { expectedRuntime, reuseRunning: true });
             sendJson(response, 200, { game: publicGame(game, supervisor) });
           } else {
             // Stop remains available even if local configuration is now invalid
             // or the active registration was removed. Check inside the queue.
-            await supervisor.stop(gameId);
+            await supervisor.stop(gameId, expectedRuntime);
             sendJson(response, 200, { gameId, status: "stopped" });
           }
         } catch (error) {

@@ -109,7 +109,7 @@ test("portal disables switching during cleanup and can stop a removed registrati
 });
 
 test("portal confirms switching and retains the originally confirmed runtime in its request", async () => {
-  const p = await portal(library([game(), game("game-b")], { gameId: "game-a", status: "running" }));
+  const p = await portal(library([game(), game("game-b")], { gameId: "game-a", revision: "original-session", status: "running" }));
   let action = p.act("game-b", "start");
   assert.equal(p.nodes.get("#confirm-action").open, true);
   assert.match(p.text("confirm-description"), /stops game-a/);
@@ -126,6 +126,7 @@ test("portal confirms switching and retains the originally confirmed runtime in 
   const post = p.calls.find((call) => call.options.method === "POST");
   assert.equal(post.path, "/api/games/game-b/start");
   assert.equal(post.options.headers["x-nexus-active-game"], "game-a");
+  assert.equal(post.options.headers["x-nexus-runtime-revision"], "original-session");
   assert.equal(post.options.headers["x-nexus-action"], "1");
   assert.match(p.text("action-feedback"), /active game changed/);
 });
@@ -148,6 +149,28 @@ test("portal hides ready links during mutations, handles failure and refreshes t
   assert.match(p.text("action-feedback"), /game action failed/);
   assert.equal(p.text("action-feedback").includes("secret-command-token"), false);
   assert.equal(p.controls().find((node) => node.textContent === "Start game").disabled, false);
+});
+
+for (const operation of ["start", "stop"]) {
+  test(`portal retains the confirmed revision for ${operation} when the same game restarts`, async () => {
+    const p = await portal(library([game()], { gameId: "game-a", revision: "old-session", status: "running" }));
+    const action = p.act("game-a", operation);
+    p.setState(library([game()], { gameId: "game-a", revision: "replacement-session", status: "running" }));
+    await p.refresh();
+    p.nodes.get("#continue-action").dispatchEvent(new Event("click"));
+    await action;
+    const post = p.calls.find((call) => call.options.method === "POST");
+    assert.equal(post.options.headers["x-nexus-active-game"], "game-a");
+    assert.equal(post.options.headers["x-nexus-runtime-revision"], "old-session");
+  });
+}
+
+test("portal sends explicit empty session preconditions when starting with no runtime", async () => {
+  const p = await portal(library([game()]));
+  await p.act("game-a", "start");
+  const post = p.calls.find((call) => call.options.method === "POST");
+  assert.equal(post.options.headers["x-nexus-active-game"], "");
+  assert.equal(post.options.headers["x-nexus-runtime-revision"], "");
 });
 
 test("portal keeps a failed start on the table only until another game is started", async () => {

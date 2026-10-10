@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 
 import { PrivatePortAllocator } from "./private-ports.js";
 import {
@@ -190,9 +190,10 @@ export class RuntimeSupervisor {
     if (this.#active === null) {
       return null;
     }
-    const { gameId, lease, basePath, status, recovered } = this.#active;
+    const { gameId, revision, lease, basePath, status, recovered } = this.#active;
     return snapshot({
       gameId,
+      revision,
       host: lease.host,
       port: lease.port,
       basePath,
@@ -250,18 +251,35 @@ export class RuntimeSupervisor {
     });
   }
 
-  start(game) {
+  start(game, { expectedRuntime, reuseRunning = false } = {}) {
     assertInstalledGame(game);
-    return this.#enqueue(() => this.#start(game));
+    return this.#enqueue(() => {
+      this.#assertExpectedRuntime(expectedRuntime);
+      if (reuseRunning && this.#active?.status === GAME_LIFECYCLE_STATUS.RUNNING
+        && this.#active.identity === installedGameIdentity(game)) {
+        return this.getState(game.manifest.id);
+      }
+      return this.#start(game);
+    });
   }
 
-  stop(expectedGameId) {
+  stop(expectedGameId, expectedRuntime) {
     return this.#enqueue(() => {
+      this.#assertExpectedRuntime(expectedRuntime);
       if (expectedGameId !== undefined && this.#active?.gameId !== expectedGameId) {
         throw Object.assign(new Error("active game changed"), { code: "RUNTIME_CHANGED" });
       }
       return this.#stopActive();
     });
+  }
+
+  #assertExpectedRuntime(expected) {
+    // Internal host operations may omit a precondition. Portal operations always
+    // supply both fields; empty strings explicitly describe no active runtime.
+    if (expected !== undefined && (expected.gameId !== (this.#active?.gameId ?? "")
+      || expected.revision !== (this.#active?.revision ?? ""))) {
+      throw Object.assign(new Error("active runtime changed"), { code: "RUNTIME_CHANGED" });
+    }
   }
 
   #enqueue(operation) {
@@ -340,6 +358,7 @@ export class RuntimeSupervisor {
       const exitPromise = execution.waitForExit();
       record = {
         gameId,
+        revision: randomUUID(),
         identity: installedGameIdentity(game),
         lease,
         execution,
@@ -523,6 +542,7 @@ export class RuntimeSupervisor {
     });
     const record = {
       gameId: entry.gameId,
+      revision: randomUUID(),
       // No installed identity: a leftover runtime is never routable or
       // adoptable, only cleaned up or reported.
       identity: null,
