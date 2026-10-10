@@ -9,7 +9,9 @@ import { fileURLToPath } from "node:url";
 
 import { loadLibrary } from "../src/registry.js";
 import { RuntimeSupervisor } from "../src/runtime/supervisor.js";
-import { createNexusServer } from "../src/server.js";
+import { MemoryOwnershipJournal } from "../src/runtime/ownership-journal.js";
+import { createLocalGameProcessLauncher } from "../src/runtime/process-launcher.js";
+import { createNexusServer, shutdownNexus } from "../src/server.js";
 
 const fixtureRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "runtime-game");
 const deferred = () => Promise.withResolvers();
@@ -30,12 +32,13 @@ async function listen(server) {
   return server.address().port;
 }
 
-async function fixture(t, { loadGameLibrary, backendPort } = {}) {
+async function fixture(t, { loadGameLibrary, backendPort, launcher, journal } = {}) {
   const root = await mkdtemp(join(tmpdir(), "nexus-ws-lifecycle-"));
   const configPath = join(root, "nexus.config.json");
   await writeFile(configPath, JSON.stringify({ games: [{ path: fixtureRoot }] }));
   const [game] = await loadLibrary(configPath);
   const supervisor = new RuntimeSupervisor({
+    launcher, journal,
     startupTimeoutMs: 3_000, pollIntervalMs: 20, stopGracePeriodMs: 500,
   });
   await supervisor.start(game);
@@ -64,6 +67,50 @@ async function fixture(t, { loadGameLibrary, backendPort } = {}) {
   return { supervisor, server, port, referenceReleased: referenceReleased.promise,
     counts: () => ({ acquisitions, releases }) };
 }
+
+test("shutdown closes a real proxied WebSocket after stop failure while retaining ownership", async (t) => {
+  const real = createLocalGameProcessLauncher({ ownProcessGroup: false });
+  let failStops = true;
+  t.after(() => { failStops = false; });
+  const journal = new MemoryOwnershipJournal();
+  const launcher = {
+    securityBoundary: real.securityBoundary,
+    recoverable: true,
+    launch(spec, options) {
+      options.recordOwnership({ kind: "test", generation: "shutdown-generation" });
+      return real.launch(spec);
+    },
+    waitForExit: (handle) => real.waitForExit(handle),
+    stop: (handle, options) => {
+      if (failStops) throw new Error("injected stop failure");
+      return real.stop(handle, options);
+    },
+  };
+  const f = await fixture(t, { launcher, journal });
+  const socket = new WebSocket(`ws://127.0.0.1:${f.port}/games/runtime-fixture/socket`);
+  t.after(() => socket.close());
+  await within(new Promise((resolve, reject) => {
+    socket.addEventListener("open", resolve, { once: true });
+    socket.addEventListener("error", reject, { once: true });
+  }));
+  const closed = new Promise((resolve) => socket.addEventListener("close", resolve, { once: true }));
+  const before = journal.read().entry;
+  await within(shutdownNexus(f.server, f.supervisor), 2_000);
+  await within(closed);
+  assert.equal(f.supervisor.getActiveRuntime().gameId, "runtime-fixture");
+  assert.equal(f.supervisor.getActiveRuntime().status, "failed");
+  assert.equal(f.supervisor.getState("runtime-fixture").failureReason, "cleanup");
+  assert.deepEqual(journal.read().entry.ownership, before.ownership);
+  assert.equal(journal.read().entry.privatePort, before.privatePort);
+});
+
+test("shutdown bounds a server close callback that never settles", async () => {
+  let stops = 0;
+  await assert.rejects(within(shutdownNexus({ close() {} }, {
+    async stop() { stops += 1; },
+  }, { closeTimeoutMs: 20 })), /server close timed out/);
+  assert.equal(stops, 2);
+});
 
 async function upgradeClient(port, server) {
   const upgraded = deferred();

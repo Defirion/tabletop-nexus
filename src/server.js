@@ -35,6 +35,8 @@ function sendJson(response, status, body, method = "GET") {
   response.end(method === "HEAD" ? undefined : content);
 }
 
+const closeUpgradedByServer = new WeakMap();
+
 function publicRuntime(supervisor) {
   const runtime = supervisor.getActiveRuntime();
   return runtime === null ? null : {
@@ -217,6 +219,7 @@ export function createNexusServer(configPath, {
       }
     });
   });
+  closeUpgradedByServer.set(server, proxy.closeUpgraded);
   return server;
 }
 
@@ -247,7 +250,7 @@ export async function startNexusServer({
  * A game that cannot be confirmed stopped is reported; the next start verifies
  * it against its ownership record.
  */
-export async function shutdownNexus(server, supervisor) {
+export async function shutdownNexus(server, supervisor, { closeTimeoutMs = 1_000 } = {}) {
   const closed = new Promise((resolveClose) => server.close(resolveClose));
   server.closeIdleConnections?.();
   // A keep-alive request may start a game while the first stop is running, so
@@ -260,7 +263,15 @@ export async function shutdownNexus(server, supervisor) {
     }
   }
   server.closeAllConnections?.();
-  await closed;
+  closeUpgradedByServer.get(server)?.();
+  let timer;
+  try {
+    await Promise.race([closed, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("Nexus server close timed out")), closeTimeoutMs);
+    })]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function main() {

@@ -228,6 +228,7 @@ function releaseWhenConnected(backendSocket, release) {
 }
 
 export function createGameProxy({ configPath, loadLibrary, supervisor }) {
+  const upgraded = new Set();
   if (typeof loadLibrary !== "function") {
     throw new TypeError("loadLibrary must be a function");
   }
@@ -377,7 +378,12 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
       socket.destroy();
     });
     socket.pause();
-    socket.once("close", cancelUpstream);
+    const connection = { socket, cancelUpstream };
+    upgraded.add(connection);
+    socket.once("close", () => {
+      upgraded.delete(connection);
+      cancelUpstream();
+    });
     if (route.kind !== "game") {
       sendSocketResponse(
         socket,
@@ -439,6 +445,7 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
         cancelUpstream();
         socket.destroy();
       });
+      backendSocket.once("close", () => socket.destroy());
       if (socket.destroyed) {
         cancelUpstream();
         return;
@@ -501,5 +508,12 @@ export function createGameProxy({ configPath, loadLibrary, supervisor }) {
     backendRequest.end();
   }
 
-  return Object.freeze({ handleHttp, handleUpgrade });
+  function closeUpgraded() {
+    for (const { socket, cancelUpstream } of upgraded) {
+      cancelUpstream();
+      socket.destroy();
+    }
+  }
+
+  return Object.freeze({ handleHttp, handleUpgrade, closeUpgraded });
 }
