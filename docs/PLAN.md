@@ -8,13 +8,41 @@ This is the active project plan. The [previous plan](archive/PLAN-before-adoptio
 
 The baseline observations below are dated snapshots. Recheck source and working changes before implementation; historical commits, PR descriptions, and prior test counts are not fresh acceptance evidence.
 
-Updated 10 October 2026. Repository: `C:/Users/defir/Documents/fun_with_Copilot/tabletop-nexus`, `Defirion/tabletop-nexus`.
+Updated 11 October 2026. Repository: `C:/Users/defir/Documents/fun_with_Copilot/tabletop-nexus`, `Defirion/tabletop-nexus`.
 
 ## Outcome
 
 A host opens one usable portal, starts Captain Flip or Pirate Island, and gives players a single Nexus-origin link. The selected game handles its own sessions and rules. Switching/stop/restart behavior is clear and releases the old runtime safely. Both games remain fully playable without a TV; Captain Flip's optional shared board is discoverable from the portal.
 
 Finish the LAN product before beginning the separate friends-only remote-play support milestone.
+
+## Current next step — always-on Debian VM on Proxmox
+
+**Direction agreed 11 October 2026:** accept the user's successful full game
+play-throughs as the practical gameplay baseline and move the working setup to
+the homelab VM. Additional device/browser/accessibility matrix reconciliation is
+follow-up work, not a blocker for this deployment. Historical acceptance notes
+below retain their original evidence limits; they do not impose another gameplay
+checklist before the move.
+
+Deployment preparation lives in [`deploy/PROXMOX.md`](../deploy/PROXMOX.md), with
+copyable VM environment/library examples. Compose supports a selected LAN IPv4
+binding and versioned local Nexus image tag, retains automatic restart and
+read-only mounts, and allows 30 seconds for container shutdown. Games remain
+independently prepared host clones. Next: select the VM address and release
+commits, install/start the stack there, and confirm it returns after a VM reboot.
+**Deployment deferred by the user, 11 October:** wait for additional Proxmox RAM,
+expected in the next few days. HTTPS preparation can proceed in a separate chat
+before that move; this does not authorize public exposure or claim N4 support.
+The Proxmox guest has not been deployed or measured by this preparation work.
+Optional names/artwork and public-project polish can follow. N4 remote play
+remains a separate milestone after this LAN deployment.
+
+Preparation verification: `npm run verify` passed on Windows (181 passed,
+26 platform/opt-in skips) and in an unprivileged read-only Linux Node 22 container
+(205 passed, two opt-in Docker skips). The three opt-in deployment tests passed
+separately against Docker Desktop, covering resolved VM/default Compose settings
+and live atomic config replacement. This validates preparation, not the target VM.
 
 ## Baseline at adoption (5 October 2026)
 
@@ -51,7 +79,7 @@ Migration impact is explicit: schema-2 registrations (including the current Pira
 
 **Dependencies:** N0; Pirate PI1 and Captain CF1–CF2. Coordinate game-owned integration checks PI2 and CF3 during this milestone.
 
-**User-reported full mobile games, 10 October 2026:** after allowing TCP 8400 and ICMPv4 echo on the Windows host's Private Wi-Fi interface for its local subnet, the user completed Pirate Island and Captain Flip through the Docker Desktop LAN portal and reported that everything worked. This establishes successful full game play on the user's devices alongside the automated/browser integration evidence below. Device models, OS/browser versions, player counts, board/Map/promo setup, and accessibility/recovery scenarios were not supplied, so those detailed PI3/CF4 matrix entries remain unverified. R3's implementation items below are now reconciled with the actual adapters and coverage. Next: finish the remaining adapter/device checklist reconciliation, Pirate PI3/PI4 and Captain CF4, then accept N3's integrated LAN release. Optional N2 profile/artwork work remains available afterward; N4 remote play follows the accepted LAN release.
+**User-reported full mobile games, 10 October 2026:** after allowing TCP 8400 and ICMPv4 echo on the Windows host's Private Wi-Fi interface for its local subnet, the user completed Pirate Island and Captain Flip through the Docker Desktop LAN portal and reported that everything worked. This establishes successful full game play on the user's devices alongside the automated/browser integration evidence below. Device models, OS/browser versions, player counts, board/Map/promo setup, and accessibility/recovery scenarios were not supplied, so those detailed PI3/CF4 matrix entries remain unverified. R3's implementation items below are now reconciled with the actual adapters and coverage. Under the 11 October direction above, those extra matrices are not a blocker; next is N3's always-on Debian/Proxmox deployment. Optional N2 profile/artwork work remains available afterward; N4 remote play follows the accepted LAN deployment.
 
 **Docker preparation and mobile stack, 10 October 2026:** local working changes add a common locked npm/pinned-pnpm installer and move Pirate compilation to its install-time `build` script. Pirate now launches prepared web/server artifacts without TypeScript installed and keeps Nexus-mode client diagnostics in `/tmp`. Full gates passed: Nexus Windows 181 passed / 25 platform skips; Nexus Linux 205 passed / one Windows-only skip; Pirate 278 tests plus typechecks, assets and runtime smoke. Both games were installed and built inside the Nexus image, then passed the combined real-game campaign with an unprivileged user, read-only root and game mounts, and no external network. A separate actual Docker Desktop Compose stack passed complete two- and five-player Pirate games, a complete Captain game, reconnect, SSE/WebSocket stop/switch closure, management-route rejection, and writable temporary diagnostics through the host's LAN ingress. The container uses the normal read-only Compose profile and publishes only port 8400. This tests local Docker Desktop operation. The later user report above adds full mobile play-through evidence; the detailed PI3/CF4 matrices and final N3 acceptance remain open.
 
@@ -122,11 +150,11 @@ This profile is not a blocker for the first useful LAN release; each game's own 
 
 ## N3 — Integrated LAN release
 
-**Dependencies:** N1/N2 and final Pirate PI3/PI4 + Captain CF4 acceptance.
+**Dependencies:** N1's successful real-game baseline and N2's usable portal controls. Further Pirate PI3/PI4 and Captain CF4 matrix work is non-blocking under the 11 October direction.
 
-1. Run `npm run verify`, then the combined real-game acceptance campaign on the final platform/adapters. Routine platform tests use the original fixture; real-device checks are recorded separately.
-2. Verify the supported Linux deployment/lifecycle environment and representative host/phone LAN paths. Windows/macOS instructions must distinguish actually verified behavior from unverified platform assumptions.
-3. Provide one setup sequence: prepare locked dependencies/assets, configure game paths, start Nexus, choose game, share game/board links, stop/switch, and troubleshoot an occupied port or failed game launch.
+1. Run `npm run verify` for changed deployment behavior. Retain the existing real-game campaign and successful user play-throughs as the gameplay baseline.
+2. Deploy to the Debian Docker VM on Proxmox and verify portal/game reachability plus return to an idle library after VM reboot. Windows/macOS instructions must distinguish actually verified behavior from unverified platform assumptions.
+3. Use [`deploy/PROXMOX.md`](../deploy/PROXMOX.md) for the repeatable setup: prepare locked dependencies/assets, configure game paths, start Nexus, choose game, share game/board links, stop/switch, update/roll back and troubleshoot.
 4. Document manifest/readiness version compatibility and future contract migration policy. Keep an entirely original demo/fixture and distributable library metadata; do not copy the personal games' copyrighted assets into Nexus.
 5. Reconcile `docs/PLAN.md`, `README.md`, architecture, adapter acceptance results, and restart limitations. Decide remaining R5 license/contribution/public-project polish separately where it does not affect functional acceptance.
 

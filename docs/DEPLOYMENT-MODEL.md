@@ -294,12 +294,21 @@ That allows a provider/free-tier offering to change without changing Nexus archi
 
 ```text
 Profile: Homelab Docker (LAN)
-Status: fixture-tested on Docker Desktop, 9 October 2026; not yet deployed or measured on the target VM
+Status: real-game Linux/Docker checks and user LAN play-throughs, 10 October 2026; target VM preparation, 11 October; not yet deployed or measured there
 Host: Debian Docker VM on Proxmox, homestack conventions, host port 8400
-Notes: deploy/README.md
+Notes: deploy/PROXMOX.md (setup/operations), deploy/README.md (general Docker profile)
 ```
 
 Nexus runs as one container with `init: true` and a read-only root filesystem. Games are git clones on the host, bind-mounted read-only at `/games`, and launched by the existing same-identity local launcher inside the Nexus container. Game dependencies and build artifacts are prepared by `deploy/update-game.sh` in a disposable container using the Nexus image. It accepts npm lockfiles or a pinned pnpm version with its lockfile, builds before removing development dependencies, and leaves runtime launches free of compilation or writes to the game tree. Game changes therefore never rebuild the Nexus image.
+
+The always-on LAN profile uses Proxmox VM autostart, Docker service autostart and
+the existing `unless-stopped` container policy. The portal returns idle after a
+VM/container restart; no game is automatically started and rooms are not resumed.
+Compose allows a selected host LAN IPv4 address (`NEXUS_BIND_IP`) and release image
+tag (`NEXUS_IMAGE`), with a 30-second container stop grace period. Config/game
+clones are durable host files; ownership state and diagnostics remain temporary
+inside the container. Actual VM reboot/reachability and resource measurements
+remain deployment work, not claims established by the preparation guide.
 
 The host config lives at `${NEXUS_HOME}/config/nexus.config.json`; Compose mounts the directory read-only at `/config`, retaining `NEXUS_CONFIG=/config/nexus.config.json`. Mounting the directory makes atomic-rename saves visible without recreating Nexus. Existing installations must move `${NEXUS_HOME}/nexus.config.json` into `config/` and run `docker compose -f deploy/compose.yaml up -d` once to recreate the container with the directory mount; see the migration commands in `deploy/README.md`.
 

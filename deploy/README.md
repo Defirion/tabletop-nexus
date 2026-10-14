@@ -1,5 +1,11 @@
 # Docker deployment (homelab LAN profile)
 
+For the always-on Debian VM on Proxmox, follow [PROXMOX.md](PROXMOX.md). It covers
+the VM, Docker installation, both real games, LAN links, reboot behavior,
+updates/rollback and backups. Copyable VM settings are in
+[`vm.env.example`](vm.env.example) and
+[`nexus.config.vm.example.json`](nexus.config.vm.example.json).
+
 Nexus runs as one container. Games are **not** in the image: they are git clones on the host, bind-mounted read-only at `/games`. Nexus re-reads its config and every `boardgame.json` on each library request, so adding or updating a game needs neither a rebuild nor a Nexus restart.
 
 This is the LAN profile. Games run as child processes inside the Nexus container under the same user, which is the current trusted-LAN model. It is not a supported remote-play deployment; see [`../docs/REMOTE-PLAY.md`](../docs/REMOTE-PLAY.md).
@@ -35,7 +41,7 @@ cp deploy/nexus.config.example.json /srv/homestack/nexus/config/nexus.config.jso
 docker compose -f deploy/compose.yaml up -d --build
 ```
 
-The portal is on host port `8400` (override with `NEXUS_PORT`). `NEXUS_HOME` overrides `/srv/homestack/nexus`.
+The portal is on host port `8400` (override with `NEXUS_PORT`). `NEXUS_HOME` overrides `/srv/homestack/nexus`. `NEXUS_BIND_IP` selects the published host IPv4 address (default `0.0.0.0` for existing installations); set the VM's reserved LAN address for the Proxmox profile. `NEXUS_IMAGE` selects the build/runtime image tag (default `tabletop-nexus:local`); export the same value for `update-game.sh`.
 
 The whole config directory is mounted so editors that save by atomic rename are visible on the next library refresh. `NEXUS_CONFIG` inside the container remains `/config/nexus.config.json`.
 
@@ -115,6 +121,8 @@ Stop the active game in the portal first. Recreating the container ends every pr
 ## Container settings
 
 - `init: true` runs a small init as PID 1 so stray processes are reaped.
+- `restart: unless-stopped` brings Nexus back when Docker starts, except after an intentional stop. The portal returns idle; live games are not restored. The healthcheck reports health but does not restart an unhealthy container.
+- `stop_grace_period: 30s` allows the active game's shutdown before Docker forces container termination.
 - `read_only: true` with a tmpfs at `/tmp`, and log rotation, per the homestack conventions.
 - Nexus keeps a small restart-recovery record under `/tmp` (the tmpfs; override with `NEXUS_STATE_DIR`). It never needs to survive the container: a recreated container has no processes to recover. Because the root filesystem is read-only, a missing writable `/tmp` would make game starts fail rather than run untracked.
 - Only the Nexus port is published. Game ports are private `127.0.0.1` ports inside the container.

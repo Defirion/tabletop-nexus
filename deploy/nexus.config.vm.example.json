@@ -1,0 +1,7 @@
+{
+  "publicOrigin": "http://192.168.10.210:8400",
+  "games": [
+    { "path": "/games/pirate-island" },
+    { "path": "/games/captain-flip" }
+  ]
+}
