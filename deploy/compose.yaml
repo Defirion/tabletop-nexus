@@ -11,16 +11,18 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
-    image: tabletop-nexus:local      # update-game.sh installs game deps with this same image
+    image: ${NEXUS_IMAGE:-tabletop-nexus:local} # updater must use the same image
     container_name: tabletop-nexus
     restart: unless-stopped
+    # Allow Nexus to stop the active game before Docker's forced termination.
+    stop_grace_period: 30s
     # Small init as PID 1 so Nexus isn't PID 1 and stray processes are reaped.
     init: true
     read_only: true
     tmpfs:
       - /tmp
     ports:
-      - "${NEXUS_PORT:-8400}:3000"   # LAN only. Game ports stay private inside the container.
+      - "${NEXUS_BIND_IP:-0.0.0.0}:${NEXUS_PORT:-8400}:3000" # Set the VM's LAN IPv4 address.
     environment:
       NEXUS_CONFIG: /config/nexus.config.json
     volumes:

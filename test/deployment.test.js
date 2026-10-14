@@ -18,6 +18,34 @@ test("Compose mounts a config directory while preserving the container config pa
   assert.match(compose, /source: \$\{NEXUS_HOME:-\/srv\/homestack\/nexus\}\/config\r?\n\s+target: \/config\r?\n\s+read_only: true/);
 });
 
+test("Compose resolves the VM LAN address and release image with one private-game ingress", {
+  skip: process.env.NEXUS_DOCKER_TESTS !== "1",
+}, async () => {
+  const env = { ...process.env };
+  for (const key of ["NEXUS_HOME", "NEXUS_BIND_IP", "NEXUS_PORT", "NEXUS_IMAGE"]) delete env[key];
+  const args = ["compose", "-f", join(repo, "deploy/compose.yaml"), "config", "--format", "json"];
+  const defaults = JSON.parse((await docker(args, { env })).stdout).services.nexus;
+  assert.equal(defaults.image, "tabletop-nexus:local");
+  assert.equal(defaults.ports.length, 1);
+  assert.equal(defaults.ports[0].host_ip, "0.0.0.0");
+  assert.equal(defaults.ports[0].published, "8400");
+
+  const configured = JSON.parse((await docker(args, { env: { ...env,
+    NEXUS_HOME: repo, NEXUS_BIND_IP: "192.168.10.210", NEXUS_PORT: "18400",
+    NEXUS_IMAGE: "tabletop-nexus:vm-release",
+  } })).stdout).services.nexus;
+  assert.equal(configured.image, "tabletop-nexus:vm-release");
+  assert.deepEqual(configured.ports, [{ host_ip: "192.168.10.210", target: 3000,
+    published: "18400", protocol: "tcp", mode: "ingress" }]);
+  assert.equal(configured.restart, "unless-stopped");
+  assert.equal(configured.stop_grace_period, "30s");
+  assert.equal(configured.init, true);
+  assert.equal(configured.read_only, true);
+  assert.deepEqual(configured.volumes.map(({ target, read_only }) => ({ target, read_only })), [
+    { target: "/config", read_only: true }, { target: "/games", read_only: true },
+  ]);
+});
+
 test("Docker sees atomically replaced config on library refresh without recreation", {
   skip: process.env.NEXUS_DOCKER_TESTS !== "1", timeout: 120_000,
 }, async (t) => {
@@ -36,7 +64,7 @@ test("Docker sees atomically replaced config on library refresh without recreati
   await writeFile(configPath, JSON.stringify({ games: [], publicOrigin: "http://192.168.1.10:8400" }));
   const override = join(root, "override.yaml");
   await writeFile(override, `services:\n  nexus:\n    image: ${image}\n    container_name: ${name}\n    restart: "no"\n`);
-  const env = { ...process.env, NEXUS_HOME: root, NEXUS_PORT: "0" };
+  const env = { ...process.env, NEXUS_HOME: root, NEXUS_BIND_IP: "127.0.0.1", NEXUS_PORT: "0" };
   const composeArgs = ["compose", "-p", name, "-f", join(repo, "deploy/compose.yaml"), "-f", override];
   t.after(async () => {
     try { await docker([...composeArgs, "down"], { env }); }
